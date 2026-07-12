@@ -21,6 +21,8 @@ import streamlit as st
 from page_capture import PageCapture, load_config
 from seleniumbase import SB
 
+from geocode import GeoRunner
+
 from importers import (
     import_from_sitemap_url,
     import_from_sitemap_xml,
@@ -237,7 +239,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
         df = pd.DataFrame(results)
         dcols = [c for c in df.columns if c not in ("png", "pdf", "file")]
         display_df = df[dcols] if dcols else df
-        st.dataframe(display_df, width="stretch", hide_index=True, use_container_width=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
 
         url_options = [f"{i+1}. {r['url']}" for i, r in enumerate(results)]
         sel_label = st.selectbox("Select a row for details", options=url_options, key=f"{key_prefix}row_sel")
@@ -259,7 +261,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
             if kind == "screenshot":
                 png_path = Path(row.get("file", ""))
                 if png_path.exists():
-                    st.image(str(png_path), use_container_width=True)
+                    st.image(str(png_path), width="stretch")
 
         if kind == "screenshot" and ok_count > 0:
             st.download_button(
@@ -298,7 +300,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                     key=f"{key_prefix}preview_sel",
                 )
                 if selected:
-                    st.image(selected, use_container_width=True)
+                    st.image(selected, width="stretch")
                     with open(selected, "rb") as f:
                         st.download_button(
                             "Download",
@@ -380,10 +382,111 @@ def render_import_tab() -> list[str] | None:
         n_invalid = sum(1 for u in urls if not is_valid_url(u))
         st.caption(f"{len(urls)} URL(s) loaded" + (f", {n_invalid} invalid (will be skipped)" if n_invalid else ""))
         with st.expander("Preview loaded URLs"):
-            st.dataframe(pd.DataFrame({"url": urls}), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame({"url": urls}), width="stretch", hide_index=True)
         return urls
 
     return None
+
+
+# ── Geocoding Tab ──
+
+def _display_geo_result(r: dict) -> None:
+    st.success(f"Found: **{r['name']}**")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Latitude", f"{r['lat']:.6f}")
+    col2.metric("Longitude", f"{r['lng']:.6f}")
+    col3.metric("Zoom", str(r["zoom"]))
+
+    st.text_input("Google Maps URL", value=r["url"], key="geo_result_url", label_visibility="collapsed")
+    st.components.v1.html(r["iframe_html"], height=450)
+    st.text_area("Embed HTML", value=r["iframe_html"], height=80, key="geo_result_iframe")
+
+    if st.button("Save to history", key="geo_save_result"):
+        entry = {"timestamp": datetime.now().isoformat()} | dict(r)
+        st.session_state.geo_history.insert(0, entry)
+        st.rerun()
+
+
+def _render_geo_history() -> None:
+    st.markdown("---")
+    st.subheader("Lookup History")
+    history = st.session_state.geo_history
+    if not history:
+        st.info("No lookups saved yet.")
+        return
+
+    df = pd.DataFrame(history)
+    cols = ["timestamp", "query", "name", "lat", "lng", "url"]
+    display_cols = [c for c in cols if c in df.columns]
+    st.dataframe(df[display_cols], width="stretch", hide_index=True)
+
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("Clear History", key="geo_clear_hist"):
+            st.session_state.geo_history = []
+            st.rerun()
+    with col2:
+        csv_buf = io.StringIO()
+        w = csv.DictWriter(csv_buf, fieldnames=list(history[0].keys()))
+        w.writeheader()
+        w.writerows(history)
+        st.download_button(
+            "Download CSV",
+            data=csv_buf.getvalue().encode(),
+            file_name="geocode_history.csv",
+            mime="text/csv",
+            key="geo_dl_csv",
+        )
+
+
+def render_geocode_tab() -> None:
+    st.subheader("Geocoding — Google Maps Business Lookup")
+    st.caption("Search Google Maps for a business and get its exact coordinates + embed iframe.")
+
+    with st.form("geo_form"):
+        query = st.text_input(
+            "Business name / location",
+            placeholder="Toyota of Springfield, IL",
+            key="geo_query_input",
+        )
+        geo_submitted = st.form_submit_button(
+            "Search Google Maps",
+            disabled=st.session_state.geo_running,
+        )
+
+    if geo_submitted and query.strip():
+        st.session_state.geo_runner = GeoRunner(query.strip())
+        st.session_state.geo_running = True
+
+    if st.session_state.geo_running and st.session_state.geo_runner:
+        runner = st.session_state.geo_runner
+        status_placeholder = st.empty()
+        cancel_col = st.columns([1])[0]
+        if cancel_col.button("Cancel", key="cancel_geo"):
+            runner.cancelled = True
+
+        if not runner._thread or not runner._thread.is_alive():
+            runner._thread = threading.Thread(target=runner.run, daemon=True)
+            runner._thread.start()
+
+        alive = True
+        while alive:
+            alive = runner._thread.is_alive()
+            status_placeholder.info(runner.status)
+            if not alive or runner.cancelled:
+                break
+            time.sleep(0.3)
+
+        st.session_state.geo_running = False
+
+        if runner.cancelled:
+            st.warning("Cancelled.")
+        elif runner.result:
+            _display_geo_result(runner.result)
+        else:
+            st.error(runner.status)
+
+    _render_geo_history()
 
 
 # ── Main UI ──
@@ -399,8 +502,14 @@ def main() -> None:
         st.session_state.running = False
     if "capture_urls" not in st.session_state:
         st.session_state.capture_urls = None
+    if "geo_runner" not in st.session_state:
+        st.session_state.geo_runner = None
+    if "geo_running" not in st.session_state:
+        st.session_state.geo_running = False
+    if "geo_history" not in st.session_state:
+        st.session_state.geo_history = []
 
-    tab_import, tab_ss, tab_seo, tab_cfg, tab_history = st.tabs(["Import URLs", "Screenshots", "SEO Extraction", "Settings", "History"])
+    tab_import, tab_ss, tab_seo, tab_geo, tab_cfg, tab_history = st.tabs(["Import URLs", "Screenshots", "SEO Extraction", "Geocoding", "Settings", "History"])
 
     # ── Import Tab ──
     with tab_import:
@@ -543,6 +652,10 @@ def main() -> None:
             st.session_state.running = False
             st.success(f"Done — {len(runner.results)} URL(s) extracted.")
             render_results(runner.results, "seo", runner.output_dir, key_prefix="seo_")
+
+    # ── Geocoding Tab ──
+    with tab_geo:
+        render_geocode_tab()
 
     # ── Settings Tab ──
     with tab_cfg:

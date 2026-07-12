@@ -8,3 +8,4 @@ __pycache__/
 downloaded_files/
 photos/
 output/
+.run_history.json
