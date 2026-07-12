@@ -159,7 +159,7 @@ def main() -> None:
 
                 st.success(f"Done — {len(results)} URL(s) captured.")
                 df = pd.DataFrame(results)
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, width="stretch")
                 if results:
                     st.download_button("Download ZIP", data=build_zip(results), file_name="capture_results.zip", mime="application/zip")
 
@@ -210,7 +210,7 @@ def main() -> None:
 
                 st.success(f"Done — {len(seo_results)} URL(s) extracted.")
                 df_seo = pd.DataFrame(seo_results)
-                st.dataframe(df_seo, use_container_width=True)
+                st.dataframe(df_seo, width="stretch")
                 if seo_results:
                     csv_buf = io.StringIO()
                     writer = csv.DictWriter(csv_buf, fieldnames=seo_results[0].keys())
