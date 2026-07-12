@@ -11,7 +11,7 @@ import shutil
 import threading
 import time
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -21,35 +21,23 @@ import streamlit as st
 from page_capture import PageCapture, load_config
 from seleniumbase import SB
 
+from importers import (
+    import_from_sitemap_url,
+    import_from_sitemap_xml,
+    import_from_csv_file,
+    import_from_wp_xml,
+    parse_urls_text,
+    is_valid_url,
+)
+
 HERE = Path(__file__).resolve().parent
 CONFIG = load_config(HERE / "config.yaml")
 HISTORY_FILE = HERE / ".run_history.json"
 
 
-# ── Helpers ──
-
-def parse_urls_input(raw: str) -> list[str]:
-    cleaned: list[str] = []
-    for line in raw.replace("\r\n", "\n").split("\n"):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        for token in re.split(r"[,\s]+", line):
-            token = token.strip()
-            if not token or token.startswith("#"):
-                continue
-            cleaned.append(token)
-    return cleaned
-
-
 def slugify(url: str) -> str:
     base = re.sub(r"^https?://", "", url.lower())
     return re.sub(r"[^a-z0-9]+", "_", base).strip("_")
-
-
-def is_valid_url(url: str) -> bool:
-    parsed = urlparse(url)
-    return bool(parsed.scheme in ("http", "https") and parsed.netloc)
 
 
 def _seo_js() -> str:
@@ -122,11 +110,15 @@ def save_history(entry: dict) -> None:
         json.dump(history, f, indent=2)
 
 
-def format_row_for_display(r: dict) -> dict:
-    return {k: (v if v else "") for k, v in r.items()}
+def delete_history_entry(index: int) -> None:
+    history = load_history()
+    if 0 <= index < len(history):
+        history.pop(index)
+        with HISTORY_FILE.open("w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
 
 
-# ── Capture runner (thread-based so we can cancel) ──
+# ── Capture runner ──
 
 class CaptureRunner:
     def __init__(self, urls, runtime_cfg, output_dir, kind="screenshot"):
@@ -227,47 +219,171 @@ class CaptureRunner:
         })
 
 
-def render_results(results: list[dict], kind: str, output_dir: Path) -> None:
-    st.subheader("Results")
+# ── Review UI (shared by capture and history) ──
 
-    tabs = st.tabs(["Summary", "Details", "Preview"])
-    df = pd.DataFrame(results)
+def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix: str = "") -> None:
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    fail_count = len(results) - ok_count
+
+    tabs = st.tabs(["Summary", "Details + Notes", "Preview"])
 
     with tabs[0]:
-        ok_count = sum(1 for r in results if r.get("status") == "ok")
-        fail_count = len(results) - ok_count
         col1, col2, col3 = st.columns(3)
         col1.metric("Total", len(results))
         col2.metric("OK", ok_count)
         col3.metric("Failed", fail_count)
 
     with tabs[1]:
+        df = pd.DataFrame(results)
         dcols = [c for c in df.columns if c not in ("png", "pdf", "file")]
         display_df = df[dcols] if dcols else df
-        st.dataframe(display_df, width="stretch")
+        st.dataframe(display_df, width="stretch", hide_index=True, use_container_width=True)
+
+        url_options = [f"{i+1}. {r['url']}" for i, r in enumerate(results)]
+        sel_label = st.selectbox("Select a row for details", options=url_options, key=f"{key_prefix}row_sel")
+        if sel_label:
+            idx = int(sel_label.split(".")[0]) - 1
+            row = results[idx]
+            st.markdown("---")
+            st.markdown(f"**Row {idx + 1}:** `{row['url']}`")
+            with st.expander("Details", expanded=True):
+                for k, v in row.items():
+                    if k in ("png", "pdf", "file"):
+                        continue
+                    st.text_input(k, value=str(v), key=f"{key_prefix}detail_{k}_{idx}", label_visibility="collapsed")
+
+            notes_key = f"{key_prefix}notes_{idx}"
+            notes_val = st.session_state.get(notes_key, "")
+            st.text_area("Notes", value=notes_val, key=notes_key, height=80)
+
+            if kind == "screenshot":
+                png_path = Path(row.get("file", ""))
+                if png_path.exists():
+                    st.image(str(png_path), use_container_width=True)
 
         if kind == "screenshot" and ok_count > 0:
-            st.download_button("Download ZIP", data=build_zip(results, output_dir), file_name="screenshots.zip", mime="application/zip")
+            st.download_button(
+                "Download ZIP",
+                data=build_zip(results, output_dir),
+                file_name="screenshots.zip",
+                mime="application/zip",
+                key=f"{key_prefix}dl_zip",
+            )
         if kind == "seo" and results:
             csv_buf = io.StringIO()
             writer = csv.DictWriter(csv_buf, fieldnames=results[0].keys())
             writer.writeheader()
             writer.writerows(results)
-            st.download_button("Download CSV", data=csv_buf.getvalue().encode(), file_name="seo_results.csv", mime="text/csv")
+            st.download_button(
+                "Download CSV",
+                data=csv_buf.getvalue().encode(),
+                file_name="seo_results.csv",
+                mime="text/csv",
+                key=f"{key_prefix}dl_csv",
+            )
 
     with tabs[2]:
         if kind == "screenshot":
-            png_files = [r.get("file", "") for r in results if r.get("file") and Path(r.get("file", "")).exists()]
+            png_files = [
+                r.get("file", "") for r in results
+                if r.get("file") and Path(r.get("file", "")).exists()
+            ]
             if not png_files:
                 st.info("No screenshots available.")
             else:
-                selected = st.selectbox("Choose screenshot", options=png_files, format_func=lambda x: Path(x).name)
+                selected = st.selectbox(
+                    "Choose screenshot",
+                    options=png_files,
+                    format_func=lambda x: Path(x).name,
+                    key=f"{key_prefix}preview_sel",
+                )
                 if selected:
                     st.image(selected, use_container_width=True)
                     with open(selected, "rb") as f:
-                        st.download_button("Download", data=f, file_name=Path(selected).name, mime="image/png")
+                        st.download_button(
+                            "Download",
+                            data=f,
+                            file_name=Path(selected).name,
+                            mime="image/png",
+                            key=f"{key_prefix}preview_dl",
+                        )
         else:
             st.info("Preview not available for SEO results. Check the Details tab.")
+
+
+# ── Import Tab ──
+
+IMPORT_SOURCES = ["Manual (text area)", "Sitemap URL", "Paste sitemap XML", "CSV file (upload)", "WordPress XML (upload)"]
+
+def render_import_tab() -> list[str] | None:
+    st.subheader("Import URLs")
+
+    source = st.radio("Source", IMPORT_SOURCES, horizontal=True, key="import_source")
+
+    urls: list[str] = []
+
+    if source == "Manual (text area)":
+        raw = st.text_area("URLs (one per line)", height=200, placeholder="https://example.com\nhttps://example.org", key="import_manual")
+        if raw:
+            urls = parse_urls_text(raw)
+
+    elif source == "Sitemap URL":
+        sitemap_url = st.text_input("Sitemap URL", placeholder="https://example.com/sitemap.xml", key="import_sitemap_url")
+        if sitemap_url and st.button("Fetch & Parse", key="import_sitemap_fetch"):
+            with st.spinner("Fetching sitemap..."):
+                try:
+                    urls = import_from_sitemap_url(sitemap_url)
+                    st.success(f"Found {len(urls)} URLs")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+
+    elif source == "Paste sitemap XML":
+        raw_xml = st.text_area("Paste sitemap XML", height=250, key="import_sitemap_xml")
+        if raw_xml and st.button("Parse", key="import_sitemap_parse"):
+            try:
+                urls = import_from_sitemap_xml(raw_xml)
+                st.success(f"Found {len(urls)} URLs")
+            except Exception as e:
+                st.error(f"Failed: {e}")
+
+    elif source == "CSV file (upload)":
+        uploaded = st.file_uploader("Upload CSV", type=["csv", "txt"], key="import_csv")
+        if uploaded:
+            raw = uploaded.read().decode("utf-8", errors="replace")
+            pairs = import_from_csv_file(raw)
+            if pairs:
+                has_second = any(b is not None for _, b in pairs)
+                if has_second:
+                    st.info("CSV has two columns — only using first column for capture")
+                urls = [a for a, _ in pairs]
+                st.success(f"Found {len(urls)} URLs from CSV")
+            else:
+                st.error("No valid URLs found in CSV")
+
+    elif source == "WordPress XML (upload)":
+        uploaded = st.file_uploader("Upload WordPress XML export", type=["xml"], key="import_wp")
+        if uploaded:
+            raw = uploaded.read()
+            try:
+                posts = import_from_wp_xml(raw)
+                urls = [p["url"] for p in posts]
+                st.success(f"Found {len(urls)} posts/pages from WordPress export")
+                with st.expander("Preview posts"):
+                    st.dataframe(pd.DataFrame(posts)[["title", "url", "date", "category"]])
+            except Exception as e:
+                st.error(f"Failed: {e}")
+
+    else:
+        urls = []
+
+    if urls:
+        n_invalid = sum(1 for u in urls if not is_valid_url(u))
+        st.caption(f"{len(urls)} URL(s) loaded" + (f", {n_invalid} invalid (will be skipped)" if n_invalid else ""))
+        with st.expander("Preview loaded URLs"):
+            st.dataframe(pd.DataFrame({"url": urls}), use_container_width=True, hide_index=True)
+        return urls
+
+    return None
 
 
 # ── Main UI ──
@@ -281,13 +397,30 @@ def main() -> None:
         st.session_state.runner = None
     if "running" not in st.session_state:
         st.session_state.running = False
+    if "capture_urls" not in st.session_state:
+        st.session_state.capture_urls = None
 
-    tab_ss, tab_seo, tab_cfg, tab_history = st.tabs(["Screenshots", "SEO Extraction", "Settings", "History"])
+    tab_import, tab_ss, tab_seo, tab_cfg, tab_history = st.tabs(["Import URLs", "Screenshots", "SEO Extraction", "Settings", "History"])
+
+    # ── Import Tab ──
+    with tab_import:
+        urls = render_import_tab()
+        if urls:
+            st.session_state.capture_urls = urls
+            valid_urls = [u for u in urls if is_valid_url(u)]
+            st.info(f"Ready: {len(valid_urls)} valid URL(s)")
+            if st.button("Send to Screenshots tab", key="to_ss"):
+                st.session_state.ss_urls_text = "\n".join(urls)
+                st.rerun()
+            if st.button("Send to SEO tab", key="to_seo"):
+                st.session_state.seo_urls_text = "\n".join(urls)
+                st.rerun()
 
     # ── Screenshots Tab ──
     with tab_ss:
+        default_ss = st.session_state.get("ss_urls_text", "")
         with st.form("ss_form"):
-            urls_text = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org")
+            urls_text = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", value=default_ss)
             col1, col2, col3 = st.columns(3)
             with col1:
                 ss_width = st.number_input("Width", value=CONFIG["viewport"]["width"], min_value=320, max_value=3840)
@@ -303,7 +436,7 @@ def main() -> None:
             submitted = st.form_submit_button("Run Capture", disabled=st.session_state.running)
 
         if submitted:
-            urls = parse_urls_input(urls_text)
+            urls = parse_urls_text(urls_text)
             invalid = [u for u in urls if not is_valid_url(u)]
             if not urls:
                 st.warning("Enter at least one URL.")
@@ -350,21 +483,19 @@ def main() -> None:
 
             st.session_state.running = False
             st.success(f"Done — {len(runner.results)} URL(s) processed.")
-            render_results(runner.results, "screenshot", runner.output_dir)
-
-        elif not st.session_state.running and st.session_state.get("last_results"):
-            render_results(st.session_state.last_results, "screenshot", Path(st.session_state.last_output_dir))
+            render_results(runner.results, "screenshot", runner.output_dir, key_prefix="ss_")
 
     # ── SEO Tab ──
     with tab_seo:
+        default_seo = st.session_state.get("seo_urls_text", "")
         with st.form("seo_form"):
-            urls_text_seo = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", key="seo_urls")
+            urls_text_seo = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", value=default_seo, key="seo_urls")
             seo_delay = st.number_input("Delay (s)", value=CONFIG["timing"]["stabilization_ms"] / 1000, min_value=0.0, max_value=60.0, key="seo_delay")
             seo_output_name = st.text_input("Output folder name", value=f"seo_{datetime.now().strftime('%Y%m%d_%H%M%S')}", key="seo_output")
             seo_submitted = st.form_submit_button("Run SEO Extraction", disabled=st.session_state.running)
 
         if seo_submitted:
-            urls_seo = parse_urls_input(urls_text_seo)
+            urls_seo = parse_urls_text(urls_text_seo)
             invalid = [u for u in urls_seo if not is_valid_url(u)]
             if not urls_seo:
                 st.warning("Enter at least one URL.")
@@ -411,7 +542,7 @@ def main() -> None:
 
             st.session_state.running = False
             st.success(f"Done — {len(runner.results)} URL(s) extracted.")
-            render_results(runner.results, "seo", runner.output_dir)
+            render_results(runner.results, "seo", runner.output_dir, key_prefix="seo_")
 
     # ── Settings Tab ──
     with tab_cfg:
@@ -465,69 +596,24 @@ def main() -> None:
 
             st.caption(f"Run at {entry['timestamp'][:19]} | {entry['total']} URLs | {entry['ok']} OK | {entry['fail']} fail")
 
-            if results:
-                htabs = st.tabs(["Summary", "Details", "Preview", "Manage"])
-                with htabs[0]:
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Total", entry["total"])
-                    col2.metric("OK", entry["ok"])
-                    col3.metric("Failed", entry["fail"])
-
-                with htabs[1]:
-                    df_h = pd.DataFrame(results)
-                    dcols = [c for c in df_h.columns if c not in ("png", "pdf", "file")]
-                    st.dataframe(df_h[dcols] if dcols else df_h, width="stretch")
-                    if kind == "screenshot" and entry["ok"] > 0 and output_dir.exists():
-                        st.download_button(
-                            "Download ZIP",
-                            data=build_zip(results, output_dir),
-                            file_name=f"history_{entry['timestamp'][:10]}.zip",
-                            mime="application/zip",
-                        )
-                    if kind == "seo" and results:
-                        csv_buf = io.StringIO()
-                        w = csv.DictWriter(csv_buf, fieldnames=results[0].keys())
-                        w.writeheader()
-                        w.writerows(results)
-                        st.download_button(
-                            "Download CSV",
-                            data=csv_buf.getvalue().encode(),
-                            file_name=f"history_seo_{entry['timestamp'][:10]}.csv",
-                            mime="text/csv",
-                        )
-
-                with htabs[2]:
+            col_rerun, col_delete, _ = st.columns([1, 1, 4])
+            with col_rerun:
+                if st.button("Re-run this job", key="hist_rerun"):
+                    urls_rerun = [r["url"] for r in results]
+                    st.session_state.capture_urls = urls_rerun
                     if kind == "screenshot":
-                        png_files = [
-                            r.get("file", "") for r in results
-                            if r.get("file") and Path(r.get("file", "")).exists()
-                        ]
-                        if not png_files:
-                            st.info("No screenshot files found on disk.")
-                        else:
-                            sel_png = st.selectbox("Choose screenshot", options=png_files, format_func=lambda x: Path(x).name, key="hist_png")
-                            if sel_png:
-                                st.image(sel_png, use_container_width=True)
-                                with open(sel_png, "rb") as fh:
-                                    st.download_button(
-                                        "Download",
-                                        data=fh,
-                                        file_name=Path(sel_png).name,
-                                        mime="image/png",
-                                        key="hist_png_dl",
-                                    )
+                        st.session_state.ss_urls_text = "\n".join(urls_rerun)
+                        st.rerun()
                     else:
-                        st.info("Preview not available for SEO results.")
+                        st.session_state.seo_urls_text = "\n".join(urls_rerun)
+                        st.rerun()
+            with col_delete:
+                if st.button("Delete from history", key="hist_del_entry"):
+                    delete_history_entry(selected_idx)
+                    st.rerun()
 
-                with htabs[3]:
-                    if output_dir.exists():
-                        st.write(f"Folder: `{output_dir}`")
-                        if st.button("Delete this run's output folder", key="hist_delete"):
-                            shutil.rmtree(output_dir)
-                            st.success("Deleted")
-                            st.rerun()
-                    else:
-                        st.warning("Output folder no longer exists on disk.")
+            if results:
+                render_results(results, kind, output_dir, key_prefix=f"hist_{selected_idx}_")
 
 
 if __name__ == "__main__":
