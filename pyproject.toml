@@ -1,0 +1,10 @@
+[project]
+name = "page-capture"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit>=1.42",
+    "seleniumbase>=4.36.0",
+    "pyyaml>=6.0",
+    "pandas>=2.2",
+]
