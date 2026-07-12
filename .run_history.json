@@ -1,0 +1,40 @@
+[
+  {
+    "timestamp": "2026-07-13T03:59:40.415913",
+    "kind": "screenshot",
+    "total": 4,
+    "ok": 4,
+    "fail": 0,
+    "output_dir": "S:\\capture\\page-capture\\capture_20260713_035750",
+    "results": [
+      {
+        "url": "https://www.competitionbmw.com/",
+        "status": "ok",
+        "page_name": "Competition BMW of Smithtown | Your Preferred New & Pre-owned BMW Dealer",
+        "h1": "WELCOME TO COMPETITION BMW OF SMITHTOWN",
+        "file": "S:\\capture\\page-capture\\capture_20260713_035750\\photos\\www_competitionbmw_com.png"
+      },
+      {
+        "url": "https://www.competitionbmw.com/how-to-solve-bmw-sensor-problems/",
+        "status": "ok",
+        "page_name": "How To Solve BMW Sensor Problems | Competition BMW of Smithtown",
+        "h1": "HOW TO SOLVE BMW SENSOR PROBLEMS",
+        "file": "S:\\capture\\page-capture\\capture_20260713_035750\\photos\\www_competitionbmw_com_how_to_solve_bmw_sensor_problems.png"
+      },
+      {
+        "url": "https://www.competitionbmw.com/is-your-bmw-engine-sputtering/",
+        "status": "ok",
+        "page_name": "Is Your BMW Engine Sputtering? | Competition BMW of Smithtown",
+        "h1": "IS YOUR BMW ENGINE SPUTTERING?",
+        "file": "S:\\capture\\page-capture\\capture_20260713_035750\\photos\\www_competitionbmw_com_is_your_bmw_engine_sputtering.png"
+      },
+      {
+        "url": "https://www.competitionbmw.com/why-is-your-bmw-car-not-starting-up/",
+        "status": "ok",
+        "page_name": "Why Is Your BMW Car Not Starting Up? | Competition BMW of Smithtown",
+        "h1": "WHY IS YOUR BMW CAR NOT STARTING UP?",
+        "file": "S:\\capture\\page-capture\\capture_20260713_035750\\photos\\www_competitionbmw_com_why_is_your_bmw_car_not_starting_up.png"
+      }
+    ]
+  }
+]

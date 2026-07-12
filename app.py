@@ -11,7 +11,7 @@ import shutil
 import threading
 import time
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -452,13 +452,82 @@ def main() -> None:
         if not history:
             st.info("No runs yet.")
         else:
-            for entry in history[:20]:
-                with st.expander(f"{entry['timestamp'][:19]} — {entry['kind']} — {entry['ok']}/{entry['total']} OK"):
-                    st.json(entry)
-                    if entry.get("results"):
-                        df_h = pd.DataFrame(entry["results"])
-                        dcols = [c for c in df_h.columns if c not in ("png", "pdf", "file")]
-                        st.dataframe(df_h[dcols] if dcols else df_h, width="stretch")
+            selected_idx = st.selectbox(
+                "Select a past run to browse",
+                options=range(len(history)),
+                format_func=lambda i: f"{history[i]['timestamp'][:19]} — {history[i]['kind']} — {history[i]['ok']}/{history[i]['total']} OK",
+                key="history_selector",
+            )
+            entry = history[selected_idx]
+            kind = entry["kind"]
+            results = entry.get("results", [])
+            output_dir = Path(entry.get("output_dir", ""))
+
+            st.caption(f"Run at {entry['timestamp'][:19]} | {entry['total']} URLs | {entry['ok']} OK | {entry['fail']} fail")
+
+            if results:
+                htabs = st.tabs(["Summary", "Details", "Preview", "Manage"])
+                with htabs[0]:
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Total", entry["total"])
+                    col2.metric("OK", entry["ok"])
+                    col3.metric("Failed", entry["fail"])
+
+                with htabs[1]:
+                    df_h = pd.DataFrame(results)
+                    dcols = [c for c in df_h.columns if c not in ("png", "pdf", "file")]
+                    st.dataframe(df_h[dcols] if dcols else df_h, width="stretch")
+                    if kind == "screenshot" and entry["ok"] > 0 and output_dir.exists():
+                        st.download_button(
+                            "Download ZIP",
+                            data=build_zip(results, output_dir),
+                            file_name=f"history_{entry['timestamp'][:10]}.zip",
+                            mime="application/zip",
+                        )
+                    if kind == "seo" and results:
+                        csv_buf = io.StringIO()
+                        w = csv.DictWriter(csv_buf, fieldnames=results[0].keys())
+                        w.writeheader()
+                        w.writerows(results)
+                        st.download_button(
+                            "Download CSV",
+                            data=csv_buf.getvalue().encode(),
+                            file_name=f"history_seo_{entry['timestamp'][:10]}.csv",
+                            mime="text/csv",
+                        )
+
+                with htabs[2]:
+                    if kind == "screenshot":
+                        png_files = [
+                            r.get("file", "") for r in results
+                            if r.get("file") and Path(r.get("file", "")).exists()
+                        ]
+                        if not png_files:
+                            st.info("No screenshot files found on disk.")
+                        else:
+                            sel_png = st.selectbox("Choose screenshot", options=png_files, format_func=lambda x: Path(x).name, key="hist_png")
+                            if sel_png:
+                                st.image(sel_png, use_container_width=True)
+                                with open(sel_png, "rb") as fh:
+                                    st.download_button(
+                                        "Download",
+                                        data=fh,
+                                        file_name=Path(sel_png).name,
+                                        mime="image/png",
+                                        key="hist_png_dl",
+                                    )
+                    else:
+                        st.info("Preview not available for SEO results.")
+
+                with htabs[3]:
+                    if output_dir.exists():
+                        st.write(f"Folder: `{output_dir}`")
+                        if st.button("Delete this run's output folder", key="hist_delete"):
+                            shutil.rmtree(output_dir)
+                            st.success("Deleted")
+                            st.rerun()
+                    else:
+                        st.warning("Output folder no longer exists on disk.")
 
 
 if __name__ == "__main__":
