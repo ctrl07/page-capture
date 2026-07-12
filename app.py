@@ -153,7 +153,7 @@ def main() -> None:
                 progress = st.progress(0, text="Starting...")
                 results = []
 
-                with SB(uc=True, test=True, headless=True, window_size=f"{ss_width},{ss_height}", chromium_arg="--no-sandbox,--disable-dev-shm-usage") as sb:
+                with SB(uc=True, test=True, headless=True, window_size=f"{ss_width},{ss_height}") as sb:
                     page = PageCapture(sb, runtime_cfg)
                     total = len(urls)
                     for i, url in enumerate(urls, start=1):
@@ -225,7 +225,7 @@ def main() -> None:
                 progress = st.progress(0, text="Starting...")
                 seo_results = []
 
-                with SB(uc=True, test=True, headless=True, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}", chromium_arg="--no-sandbox,--disable-dev-shm-usage") as sb:
+                with SB(uc=True, test=True, headless=True, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
                     page = PageCapture(sb, runtime_cfg)
                     total = len(urls_seo)
                     for i, url in enumerate(urls_seo, start=1):

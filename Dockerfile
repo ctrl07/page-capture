@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV DISPLAY=:99
+ENV CHROME_OPTIONS=--no-sandbox,--disable-dev-shm-usage,--disable-gpu
 
 WORKDIR /app
 COPY requirements.txt .
