@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.direnv/
+.venv/
+*.png
+*.pdf
+*.csv
+downloaded_files/
+photos/
+output/
