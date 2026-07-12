@@ -1,4 +1,4 @@
-"""CLI runner for screenshots and SEO extraction via GitHub Actions."""
+"""CLI runner for screenshots and SEO extraction (desktop use)."""
 
 from __future__ import annotations
 
@@ -77,10 +77,9 @@ def run_screenshots(urls: list[str]) -> list[dict]:
     photos_dir = HERE / "photos"
     photos_dir.mkdir(exist_ok=True)
 
-    with SB(uc=True, test=True, headless=True, window_size="1920,1080") as sb:
+    with SB(uc=True, test=True, headless=False, window_size="1920,1080") as sb:
         page = PageCapture(sb, runtime_cfg)
         for i, url in enumerate(urls):
-            slug = slugify(url)
             print(f"[{i+1}/{len(urls)}] Capturing: {url}")
             try:
                 page.open(url)
@@ -116,7 +115,7 @@ def run_seo(urls: list[str]) -> list[dict]:
     }
     results = []
 
-    with SB(uc=True, test=True, headless=True, window_size="1920,1080") as sb:
+    with SB(uc=True, test=True, headless=False, window_size="1920,1080") as sb:
         page = PageCapture(sb, runtime_cfg)
         for i, url in enumerate(urls):
             print(f"[{i+1}/{len(urls)}] Extracting SEO: {url}")

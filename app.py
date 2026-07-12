@@ -1,4 +1,4 @@
-"""Page Capture — Streamlit UI for screenshots and SEO extraction."""
+"""Page Capture — Desktop app for screenshots and SEO extraction."""
 
 from __future__ import annotations
 
@@ -49,7 +49,6 @@ def _seo_js() -> str:
         const el = document.querySelector(`meta[${attr}="${val}"]`);
         return el ? (el.getAttribute('content') || '') : '';
     };
-
     const title = document.title || '';
     const metaDesc = metaContent('name', 'description');
     const canonical = (q('link[rel="canonical"]') || {}).href || '';
@@ -62,9 +61,7 @@ def _seo_js() -> str:
     const ogImage = metaContent('property', 'og:image');
     const schemaTypes = qa('script[type="application/ld+json"]')
         .map(s => { try { const d = JSON.parse(s.textContent); return d['@type'] || ''; } catch(e) { return ''; } })
-        .flat()
-        .filter(Boolean)
-        .join(' | ');
+        .flat().filter(Boolean).join(' | ');
     const bodyText = (document.body || {innerText: ''}).innerText || '';
     const wordCount = bodyText.trim().split(/\s+/).filter(Boolean).length;
     const host = window.location.hostname;
@@ -77,23 +74,10 @@ def _seo_js() -> str:
         } catch(e) {}
     });
     const imagesMissingAlt = qa('img').filter(img => !img.getAttribute('alt')).length;
-
     return JSON.stringify({
-        title,
-        metaDesc,
-        canonical,
-        robotsMeta,
-        h1,
-        h2s,
-        h3s,
-        ogTitle,
-        ogDesc,
-        ogImage,
-        schemaTypes,
-        wordCount,
-        internal,
-        external,
-        imagesMissingAlt,
+        title, metaDesc, canonical, robotsMeta, h1, h2s, h3s,
+        ogTitle, ogDesc, ogImage, schemaTypes, wordCount,
+        internal, external, imagesMissingAlt,
     });
 })()
 """
@@ -111,20 +95,15 @@ def build_zip(results: list[dict]) -> bytes:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Page Capture", layout="wide", page_icon="📸")
-    st.title("📸 Page Capture")
+    st.set_page_config(page_title="Page Capture", layout="wide")
+    st.title("Page Capture")
     st.caption("Automated screenshots and SEO extraction via headless Chromium.")
 
     tab_ss, tab_seo, tab_cfg = st.tabs(["Screenshots", "SEO Extraction", "Settings"])
 
-    # ── Screenshots Tab ──
     with tab_ss:
         with st.form("ss_form"):
-            urls_text = st.text_area(
-                "URLs (one per line)",
-                height=150,
-                placeholder="https://example.com\nhttps://example.org",
-            )
+            urls_text = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org")
             col1, col2, col3 = st.columns(3)
             with col1:
                 ss_width = st.number_input("Width", value=CONFIG["viewport"]["width"], min_value=320, max_value=3840)
@@ -137,7 +116,7 @@ def main() -> None:
                 ss_full = st.checkbox("Full page", value=True)
             with col5:
                 ss_pdf = st.checkbox("Also save PDF", value=False)
-            submitted = st.form_submit_button("🚀 Run Capture")
+            submitted = st.form_submit_button("Run Capture")
 
         if submitted:
             urls = parse_urls_input(urls_text)
@@ -153,7 +132,7 @@ def main() -> None:
                 progress = st.progress(0, text="Starting...")
                 results = []
 
-                with SB(uc=True, test=True, headless=True, browser_args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"], window_size=f"{ss_width},{ss_height}") as sb:
+                with SB(uc=True, test=True, headless=False, window_size=f"{ss_width},{ss_height}") as sb:
                     page = PageCapture(sb, runtime_cfg)
                     total = len(urls)
                     for i, url in enumerate(urls, start=1):
@@ -164,52 +143,31 @@ def main() -> None:
                             sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
                             page.hide_overlays()
                             refs = {}
-                            if True:
-                                png_path = HERE / f"{slug}.png"
-                                page.capture_png(png_path)
-                                refs["png"] = str(png_path)
+                            png_path = HERE / f"{slug}.png"
+                            page.capture_png(png_path)
+                            refs["png"] = str(png_path)
                             if ss_pdf:
                                 pdf_path = HERE / f"{slug}.pdf"
                                 page.capture_pdf(pdf_path)
                                 refs["pdf"] = str(pdf_path)
                             extracted = page.extract_data()
-                            results.append({
-                                "url": url,
-                                "status": "✅",
-                                "page_name": extracted.get("page_name", ""),
-                                "h1": extracted.get("h1", ""),
-                                **refs,
-                            })
+                            results.append({"url": url, "status": "ok", "page_name": extracted.get("page_name", ""), "h1": extracted.get("h1", ""), **refs})
                         except Exception as exc:
-                            results.append({"url": url, "status": f"❌ {exc}"})
+                            results.append({"url": url, "status": f"error: {exc}"})
                         progress.progress(i / total, text=f"{i}/{total} — {url}")
-                        time.sleep(random.uniform(
-                            runtime_cfg["timing"]["inter_page_delay_min"],
-                            runtime_cfg["timing"]["inter_page_delay_max"],
-                        ))
+                        time.sleep(random.uniform(runtime_cfg["timing"]["inter_page_delay_min"], runtime_cfg["timing"]["inter_page_delay_max"]))
 
                 st.success(f"Done — {len(results)} URL(s) captured.")
                 df = pd.DataFrame(results)
                 st.dataframe(df, use_container_width=True)
                 if results:
-                    st.download_button(
-                        "⬇ Download ZIP",
-                        data=build_zip(results),
-                        file_name="capture_results.zip",
-                        mime="application/zip",
-                    )
+                    st.download_button("Download ZIP", data=build_zip(results), file_name="capture_results.zip", mime="application/zip")
 
-    # ── SEO Tab ──
     with tab_seo:
         with st.form("seo_form"):
-            urls_text_seo = st.text_area(
-                "URLs (one per line)",
-                height=150,
-                placeholder="https://example.com\nhttps://example.org",
-                key="seo_urls",
-            )
+            urls_text_seo = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", key="seo_urls")
             seo_delay = st.number_input("Delay (s)", value=CONFIG["timing"]["stabilization_ms"] / 1000, min_value=1.0, max_value=60.0, key="seo_delay")
-            seo_submitted = st.form_submit_button("🚀 Run SEO Extraction")
+            seo_submitted = st.form_submit_button("Run SEO Extraction")
 
         if seo_submitted:
             urls_seo = parse_urls_input(urls_text_seo)
@@ -225,7 +183,7 @@ def main() -> None:
                 progress = st.progress(0, text="Starting...")
                 seo_results = []
 
-                with SB(uc=True, test=True, headless=True, browser_args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"], window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
+                with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
                     page = PageCapture(sb, runtime_cfg)
                     total = len(urls_seo)
                     for i, url in enumerate(urls_seo, start=1):
@@ -235,33 +193,20 @@ def main() -> None:
                             raw = sb.cdp.evaluate(_seo_js())
                             payload = json.loads(raw or "{}")
                             seo_results.append({
-                                "url": url,
-                                "status": "✅",
-                                "title": payload.get("title", ""),
-                                "title_len": len(payload.get("title", "")),
-                                "meta_description": payload.get("metaDesc", ""),
-                                "meta_desc_len": len(payload.get("metaDesc", "")),
-                                "canonical": payload.get("canonical", ""),
-                                "robots_meta": payload.get("robotsMeta", ""),
-                                "h1": payload.get("h1", ""),
-                                "h2s": payload.get("h2s", ""),
-                                "h3s": payload.get("h3s", ""),
-                                "og_title": payload.get("ogTitle", ""),
-                                "og_description": payload.get("ogDesc", ""),
-                                "og_image": payload.get("ogImage", ""),
-                                "schema_types": payload.get("schemaTypes", ""),
-                                "word_count": payload.get("wordCount", 0),
-                                "internal_links": payload.get("internal", 0),
-                                "external_links": payload.get("external", 0),
-                                "images_missing_alt": payload.get("imagesMissingAlt", 0),
+                                "url": url, "status": "ok",
+                                "title": payload.get("title", ""), "title_len": len(payload.get("title", "")),
+                                "meta_description": payload.get("metaDesc", ""), "meta_desc_len": len(payload.get("metaDesc", "")),
+                                "canonical": payload.get("canonical", ""), "robots_meta": payload.get("robotsMeta", ""),
+                                "h1": payload.get("h1", ""), "h2s": payload.get("h2s", ""), "h3s": payload.get("h3s", ""),
+                                "og_title": payload.get("ogTitle", ""), "og_description": payload.get("ogDesc", ""),
+                                "og_image": payload.get("ogImage", ""), "schema_types": payload.get("schemaTypes", ""),
+                                "word_count": payload.get("wordCount", 0), "internal_links": payload.get("internal", 0),
+                                "external_links": payload.get("external", 0), "images_missing_alt": payload.get("imagesMissingAlt", 0),
                             })
                         except Exception as exc:
-                            seo_results.append({"url": url, "status": f"❌ {exc}"})
+                            seo_results.append({"url": url, "status": f"error: {exc}"})
                         progress.progress(i / total, text=f"{i}/{total} — {url}")
-                        time.sleep(random.uniform(
-                            runtime_cfg["timing"]["inter_page_delay_min"],
-                            runtime_cfg["timing"]["inter_page_delay_max"],
-                        ))
+                        time.sleep(random.uniform(runtime_cfg["timing"]["inter_page_delay_min"], runtime_cfg["timing"]["inter_page_delay_max"]))
 
                 st.success(f"Done — {len(seo_results)} URL(s) extracted.")
                 df_seo = pd.DataFrame(seo_results)
@@ -271,14 +216,8 @@ def main() -> None:
                     writer = csv.DictWriter(csv_buf, fieldnames=seo_results[0].keys())
                     writer.writeheader()
                     writer.writerows(seo_results)
-                    st.download_button(
-                        "⬇ Download CSV",
-                        data=csv_buf.getvalue().encode(),
-                        file_name="seo_results.csv",
-                        mime="text/csv",
-                    )
+                    st.download_button("Download CSV", data=csv_buf.getvalue().encode(), file_name="seo_results.csv", mime="text/csv")
 
-    # ── Settings Tab ──
     with tab_cfg:
         st.subheader("Configuration")
         st.json(CONFIG)
