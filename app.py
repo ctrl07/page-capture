@@ -23,6 +23,15 @@ from seleniumbase import SB
 
 from geocode import GeoRunner
 
+from extraction import (
+    extract_from_page,
+    EXTRACTION_TYPES,
+    save_ruleset,
+    load_ruleset,
+    delete_ruleset,
+    list_rulesets,
+)
+
 from importers import (
     import_from_sitemap_url,
     import_from_sitemap_xml,
@@ -221,6 +230,74 @@ class CaptureRunner:
         })
 
 
+# ── Extraction runner ──
+
+class ExtractionRunner:
+    def __init__(self, urls, rules, runtime_cfg, output_dir):
+        self.urls = urls
+        self.rules = rules
+        self.runtime_cfg = runtime_cfg
+        self.output_dir = output_dir
+        self.results = []
+        self.cancelled = False
+        self._thread = None
+
+    def run(self):
+        self.results = []
+        output_dir = self.output_dir
+        urls = self.urls
+        rules = self.rules
+        runtime_cfg = self.runtime_cfg
+        data_dir = output_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        results = self.results
+
+        with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
+            page = PageCapture(sb, runtime_cfg)
+            for i, url in enumerate(urls):
+                if self.cancelled:
+                    break
+                row = {"url": url, "status": "waiting"}
+                try:
+                    if not is_valid_url(url):
+                        row["status"] = "invalid URL"
+                        results.append(row)
+                        continue
+                    page.open(url)
+                    page.scroll()
+                    sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
+                    page.hide_overlays()
+                    data = extract_from_page(sb, rules)
+                    row = {"url": url, "status": "ok", **data}
+                except Exception as exc:
+                    row = {"url": url, "status": f"error: {exc}"}
+                results.append(row)
+                time.sleep(random.uniform(
+                    runtime_cfg["timing"]["inter_page_delay_min"],
+                    runtime_cfg["timing"]["inter_page_delay_max"],
+                ))
+
+        csv_path = data_dir / "extraction_results.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            if results:
+                w = csv.DictWriter(f, fieldnames=results[0].keys())
+                w.writeheader()
+                w.writerows(results)
+
+        timestamp = datetime.now().isoformat()
+        total = len(results)
+        ok_count = sum(1 for r in results if r.get("status") == "ok")
+        save_history({
+            "timestamp": timestamp,
+            "kind": "extraction",
+            "total": total,
+            "ok": ok_count,
+            "fail": total - ok_count,
+            "output_dir": str(output_dir),
+            "results": results,
+        })
+
+
 # ── Review UI (shared by capture and history) ──
 
 def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix: str = "") -> None:
@@ -271,7 +348,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                 mime="application/zip",
                 key=f"{key_prefix}dl_zip",
             )
-        if kind == "seo" and results:
+        if kind in ("seo", "extraction") and results:
             csv_buf = io.StringIO()
             writer = csv.DictWriter(csv_buf, fieldnames=results[0].keys())
             writer.writeheader()
@@ -279,7 +356,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
             st.download_button(
                 "Download CSV",
                 data=csv_buf.getvalue().encode(),
-                file_name="seo_results.csv",
+                file_name=f"{kind}_results.csv",
                 mime="text/csv",
                 key=f"{key_prefix}dl_csv",
             )
@@ -310,7 +387,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                             key=f"{key_prefix}preview_dl",
                         )
         else:
-            st.info("Preview not available for SEO results. Check the Details tab.")
+            st.info("Preview not available for SEO / extraction results. Check the Details tab.")
 
 
 # ── Import Tab ──
@@ -494,7 +571,7 @@ def render_geocode_tab() -> None:
 def main() -> None:
     st.set_page_config(page_title="Page Capture", layout="wide")
     st.title("Page Capture")
-    st.caption("Automated screenshots and SEO extraction via headless Chromium.")
+    st.caption("Automated screenshots, data extraction, and geocoding via headless Chromium.")
 
     if "runner" not in st.session_state:
         st.session_state.runner = None
@@ -509,7 +586,7 @@ def main() -> None:
     if "geo_history" not in st.session_state:
         st.session_state.geo_history = []
 
-    tab_import, tab_ss, tab_seo, tab_geo, tab_cfg, tab_history = st.tabs(["Import URLs", "Screenshots", "SEO Extraction", "Geocoding", "Settings", "History"])
+    tab_import, tab_ss, tab_seo, tab_geo, tab_cfg, tab_history = st.tabs(["Import URLs", "Screenshots", "Data Extraction", "Geocoding", "Settings", "History"])
 
     # ── Import Tab ──
     with tab_import:
@@ -521,7 +598,7 @@ def main() -> None:
             if st.button("Send to Screenshots tab", key="to_ss"):
                 st.session_state.ss_urls_text = "\n".join(urls)
                 st.rerun()
-            if st.button("Send to SEO tab", key="to_seo"):
+            if st.button("Send to Extraction tab", key="to_seo"):
                 st.session_state.seo_urls_text = "\n".join(urls)
                 st.rerun()
 
@@ -594,64 +671,71 @@ def main() -> None:
             st.success(f"Done — {len(runner.results)} URL(s) processed.")
             render_results(runner.results, "screenshot", runner.output_dir, key_prefix="ss_")
 
-    # ── SEO Tab ──
+    # ── Data Extraction Tab ──
     with tab_seo:
-        default_seo = st.session_state.get("seo_urls_text", "")
-        with st.form("seo_form"):
-            urls_text_seo = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", value=default_seo, key="seo_urls")
-            seo_delay = st.number_input("Delay (s)", value=CONFIG["timing"]["stabilization_ms"] / 1000, min_value=0.0, max_value=60.0, key="seo_delay")
-            seo_output_name = st.text_input("Output folder name", value=f"seo_{datetime.now().strftime('%Y%m%d_%H%M%S')}", key="seo_output")
-            seo_submitted = st.form_submit_button("Run SEO Extraction", disabled=st.session_state.running)
+        st.subheader("Data Extraction")
+        extract_mode = st.radio("Mode", ["Quick SEO", "Custom Rules"], horizontal=True, key="extract_mode")
 
-        if seo_submitted:
-            urls_seo = parse_urls_text(urls_text_seo)
-            invalid = [u for u in urls_seo if not is_valid_url(u)]
-            if not urls_seo:
-                st.warning("Enter at least one URL.")
-            elif invalid:
-                st.error(f"Invalid URLs: {', '.join(invalid)}")
-            else:
-                output_dir = HERE / seo_output_name
-                output_dir.mkdir(parents=True, exist_ok=True)
-                runtime_cfg = {
-                    "viewport": {**CONFIG["viewport"]},
-                    "timing": {**CONFIG["timing"], "stabilization_ms": int(seo_delay * 1000)},
-                    "hide": CONFIG.get("hide", {}),
-                    "hide_visibility": CONFIG.get("hide_visibility", {}),
-                }
-                runner = CaptureRunner(urls_seo, runtime_cfg, output_dir, "seo")
-                st.session_state.runner = runner
-                st.session_state.running = True
+        if extract_mode == "Quick SEO":
+            default_seo = st.session_state.get("seo_urls_text", "")
+            with st.form("seo_form"):
+                urls_text_seo = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", value=default_seo, key="seo_urls")
+                seo_delay = st.number_input("Delay (s)", value=CONFIG["timing"]["stabilization_ms"] / 1000, min_value=0.0, max_value=60.0, key="seo_delay")
+                seo_output_name = st.text_input("Output folder name", value=f"seo_{datetime.now().strftime('%Y%m%d_%H%M%S')}", key="seo_output")
+                seo_submitted = st.form_submit_button("Run SEO Extraction", disabled=st.session_state.running)
 
-        if st.session_state.running and st.session_state.runner:
-            runner = st.session_state.runner
-            status_placeholder = st.empty()
-            progress_bar = st.progress(0)
-            cancel_col = st.columns([1])[0]
-            if cancel_col.button("Cancel", key="cancel_seo"):
-                runner.cancelled = True
+            if seo_submitted:
+                urls_seo = parse_urls_text(urls_text_seo)
+                invalid = [u for u in urls_seo if not is_valid_url(u)]
+                if not urls_seo:
+                    st.warning("Enter at least one URL.")
+                elif invalid:
+                    st.error(f"Invalid URLs: {', '.join(invalid)}")
+                else:
+                    output_dir = HERE / seo_output_name
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    runtime_cfg = {
+                        "viewport": {**CONFIG["viewport"]},
+                        "timing": {**CONFIG["timing"], "stabilization_ms": int(seo_delay * 1000)},
+                        "hide": CONFIG.get("hide", {}),
+                        "hide_visibility": CONFIG.get("hide_visibility", {}),
+                    }
+                    runner = CaptureRunner(urls_seo, runtime_cfg, output_dir, "seo")
+                    st.session_state.runner = runner
+                    st.session_state.running = True
 
-            if not runner._thread or not runner._thread.is_alive():
-                runner._thread = threading.Thread(target=runner.run, daemon=True)
-                runner._thread.start()
+            if st.session_state.running and st.session_state.runner:
+                runner = st.session_state.runner
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                cancel_col = st.columns([1])[0]
+                if cancel_col.button("Cancel", key="cancel_seo"):
+                    runner.cancelled = True
 
-            alive = True
-            while alive:
-                alive = runner._thread.is_alive()
-                done = len(runner.results)
-                total = len(runner.urls)
-                pct = min(done / total, 1.0) if total else 0
-                progress_bar.progress(pct, text=f"{done}/{total}")
-                if runner.results:
-                    last = runner.results[-1]
-                    status_placeholder.info(f"Last: {last['url']} — {last['status']}")
-                if not alive:
-                    break
-                time.sleep(0.3)
+                if not runner._thread or not runner._thread.is_alive():
+                    runner._thread = threading.Thread(target=runner.run, daemon=True)
+                    runner._thread.start()
 
-            st.session_state.running = False
-            st.success(f"Done — {len(runner.results)} URL(s) extracted.")
-            render_results(runner.results, "seo", runner.output_dir, key_prefix="seo_")
+                alive = True
+                while alive:
+                    alive = runner._thread.is_alive()
+                    done = len(runner.results)
+                    total = len(runner.urls)
+                    pct = min(done / total, 1.0) if total else 0
+                    progress_bar.progress(pct, text=f"{done}/{total}")
+                    if runner.results:
+                        last = runner.results[-1]
+                        status_placeholder.info(f"Last: {last['url']} — {last['status']}")
+                    if not alive:
+                        break
+                    time.sleep(0.3)
+
+                st.session_state.running = False
+                st.success(f"Done — {len(runner.results)} URL(s) extracted.")
+                render_results(runner.results, "seo", runner.output_dir, key_prefix="seo_")
+
+        else:
+            render_extraction_rules_tab()
 
     # ── Geocoding Tab ──
     with tab_geo:
@@ -716,10 +800,9 @@ def main() -> None:
                     st.session_state.capture_urls = urls_rerun
                     if kind == "screenshot":
                         st.session_state.ss_urls_text = "\n".join(urls_rerun)
-                        st.rerun()
                     else:
                         st.session_state.seo_urls_text = "\n".join(urls_rerun)
-                        st.rerun()
+                    st.rerun()
             with col_delete:
                 if st.button("Delete from history", key="hist_del_entry"):
                     delete_history_entry(selected_idx)
@@ -727,6 +810,155 @@ def main() -> None:
 
             if results:
                 render_results(results, kind, output_dir, key_prefix=f"hist_{selected_idx}_")
+
+
+# ── Extraction Rules Tab Functions ──
+
+def _rule_editor_row(i: int, rule: dict) -> None:
+    cols = st.columns([2, 3, 1.5, 1.5, 0.8, 0.5])
+    with cols[0]:
+        rule["name"] = st.text_input("Field", value=rule.get("name", ""), key=f"er_name_{i}", label_visibility="collapsed", placeholder="Field name")
+    with cols[1]:
+        rule["selector"] = st.text_input("Selector", value=rule.get("selector", ""), key=f"er_sel_{i}", label_visibility="collapsed", placeholder="CSS selector")
+    with cols[2]:
+        rule["type"] = st.selectbox("Type", EXTRACTION_TYPES, index=EXTRACTION_TYPES.index(rule.get("type", "text")), key=f"er_type_{i}", label_visibility="collapsed")
+    with cols[3]:
+        attr_val = rule.get("attribute", "")
+        rule["attribute"] = st.text_input("Attr", value=attr_val, key=f"er_attr_{i}", label_visibility="collapsed", placeholder="href/src/alt")
+    with cols[4]:
+        rule["multiple"] = st.checkbox("M", value=rule.get("multiple", False), key=f"er_multi_{i}", label_visibility="collapsed", help="Multiple values")
+    with cols[5]:
+        st.button("✕", key=f"er_del_{i}", on_click=lambda idx=i: st.session_state.extraction_rules.pop(idx))
+
+
+def _rule_regex_editors(rules: list[dict]) -> None:
+    for i, rule in enumerate(rules):
+        rule["regex"] = st.text_input(
+            f"Regex — {rule.get('name', f'Rule {i+1}')}",
+            value=rule.get("regex", ""),
+            key=f"er_regex_{i}",
+            placeholder="Optional regex to extract from result",
+        )
+
+
+def render_extraction_rules_tab() -> None:
+    st.caption("Define custom CSS selector rules to extract data from pages.")
+
+    rules: list[dict] = st.session_state.get("extraction_rules", [])
+    if "extraction_rules" not in st.session_state:
+        st.session_state.extraction_rules = rules
+
+    if rules:
+        cols = st.columns([2, 3, 1.5, 1.5, 0.8])
+        with cols[0]: st.markdown("**Field**")
+        with cols[1]: st.markdown("**Selector**")
+        with cols[2]: st.markdown("**Type**")
+        with cols[3]: st.markdown("**Attr**")
+        with cols[4]: st.markdown("**Multi**")
+
+        for i in range(len(rules) - 1, -1, -1):
+            if i >= len(st.session_state.extraction_rules):
+                continue
+            _rule_editor_row(i, st.session_state.extraction_rules[i])
+
+        with st.expander("Regex (optional)", expanded=False):
+            _rule_regex_editors(st.session_state.extraction_rules)
+
+    col_add, col_spacer = st.columns([1, 5])
+    with col_add:
+        if st.button("+ Add Rule", key="er_add_rule"):
+            st.session_state.extraction_rules.append({
+                "name": "", "selector": "", "type": "text", "attribute": "", "regex": "", "multiple": False,
+            })
+            st.rerun()
+
+    st.markdown("---")
+
+    # Rule set save / load
+    col_save, col_load, col_del, _ = st.columns([1, 1, 1, 4])
+    with col_save:
+        rs_name = st.text_input("Rule set name", key="er_rs_name", placeholder="my-rules", label_visibility="collapsed")
+        if st.button("Save", key="er_save") and rs_name.strip():
+            save_ruleset(st.session_state.extraction_rules, rs_name.strip())
+            st.success(f"Saved as {rs_name.strip()}.json")
+    with col_load:
+        rs_list = list_rulesets()
+        if rs_list:
+            selected_rs = st.selectbox("Load", [""] + rs_list, key="er_rs_load", label_visibility="collapsed")
+            if selected_rs and st.button("Load", key="er_load"):
+                st.session_state.extraction_rules = load_ruleset(selected_rs)
+                st.rerun()
+    with col_del:
+        if rs_list:
+            del_rs = st.selectbox("Delete", [""] + rs_list, key="er_rs_del", label_visibility="collapsed")
+            if del_rs and st.button("Delete", key="er_del_rs"):
+                delete_ruleset(del_rs)
+                st.rerun()
+
+    st.markdown("---")
+
+    # Run extraction
+    rules = st.session_state.extraction_rules
+    if not rules:
+        st.info("Add at least one extraction rule above.")
+        return
+
+    default_urls = st.session_state.get("seo_urls_text", "")
+    with st.form("extraction_form"):
+        ext_urls = st.text_area("URLs (one per line)", height=120, placeholder="https://example.com\nhttps://example.org", value=default_urls, key="ext_urls")
+        ext_delay = st.number_input("Delay (s)", value=CONFIG["timing"]["stabilization_ms"] / 1000, min_value=0.0, max_value=60.0, key="ext_delay")
+        ext_output = st.text_input("Output folder name", value=f"extraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}", key="ext_output")
+        ext_submitted = st.form_submit_button("Run Extraction", disabled=st.session_state.running)
+
+    if ext_submitted:
+        parsed = parse_urls_text(ext_urls)
+        invalid = [u for u in parsed if not is_valid_url(u)]
+        if not parsed:
+            st.warning("Enter at least one URL.")
+        elif invalid:
+            st.error(f"Invalid URLs: {', '.join(invalid)}")
+        else:
+            output_dir = HERE / ext_output
+            output_dir.mkdir(parents=True, exist_ok=True)
+            runtime_cfg = {
+                "viewport": {**CONFIG["viewport"]},
+                "timing": {**CONFIG["timing"], "stabilization_ms": int(ext_delay * 1000)},
+                "hide": CONFIG.get("hide", {}),
+                "hide_visibility": CONFIG.get("hide_visibility", {}),
+            }
+            runner = ExtractionRunner(parsed, rules, runtime_cfg, output_dir)
+            st.session_state.extraction_runner = runner
+            st.session_state.running = True
+
+    if st.session_state.running and st.session_state.get("extraction_runner"):
+        runner = st.session_state.extraction_runner
+        status_placeholder = st.empty()
+        progress_bar = st.progress(0)
+        cancel_col = st.columns([1])[0]
+        if cancel_col.button("Cancel", key="cancel_ext"):
+            runner.cancelled = True
+
+        if not runner._thread or not runner._thread.is_alive():
+            runner._thread = threading.Thread(target=runner.run, daemon=True)
+            runner._thread.start()
+
+        alive = True
+        while alive:
+            alive = runner._thread.is_alive()
+            done = len(runner.results)
+            total = len(runner.urls)
+            pct = min(done / total, 1.0) if total else 0
+            progress_bar.progress(pct, text=f"{done}/{total}")
+            if runner.results:
+                last = runner.results[-1]
+                status_placeholder.info(f"Last: {last['url']} — {last['status']}")
+            if not alive:
+                break
+            time.sleep(0.3)
+
+        st.session_state.running = False
+        st.success(f"Done — {len(runner.results)} URL(s) extracted.")
+        render_results(runner.results, "extraction", runner.output_dir, key_prefix="ext_")
 
 
 if __name__ == "__main__":
