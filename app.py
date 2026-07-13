@@ -736,7 +736,7 @@ def page_dashboard() -> None:
 # ── New Run page (unified workflow) ──
 
 def page_new_run() -> None:
-    st.subheader("New Run")
+    st.subheader("New Capture")
 
     for key, default in [
         ("newrun_collectors", {"screenshot": True, "seo": True, "extraction": False}),
@@ -883,7 +883,7 @@ def page_new_run() -> None:
     if reasons:
         st.caption(f"To start: {', '.join(reasons)}")
 
-    if st.button("Start Run", disabled=btn_disabled, type="primary", key="newrun_start", use_container_width=True):
+    if st.button("Start Capture", disabled=btn_disabled, type="primary", key="newrun_start", use_container_width=True):
         safe_name = re.sub(r"[^\w\-]", "_", output_name.strip())
         output_dir = HERE / safe_name
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1001,7 +1001,7 @@ def _render_run_complete(runner) -> None:
 
     # Run again
     st.markdown("---")
-    if st.button("Run Again", key="newrun_run_again"):
+    if st.button("Capture Again", key="newrun_run_again"):
         st.session_state.newrun_just_finished = False
         st.rerun()
 
@@ -1014,7 +1014,7 @@ def main() -> None:
 
     pages = {
         "Capture": [
-            st.Page(page_new_run, title="New Run", icon=":material/rocket_launch:", default=True),
+            st.Page(page_new_run, title="New Capture", icon=":material/rocket_launch:", default=True),
             st.Page(page_dashboard, title="Dashboard", icon=":material/dashboard:"),
             st.Page(page_extraction, title="Data Extraction", icon=":material/data_object:"),
         ],
