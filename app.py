@@ -12,8 +12,9 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from seleniumbase import SB
 
-from page_capture import load_config
+from page_capture import load_config, PageCapture
 from extraction import (
     EXTRACTION_TYPES,
     save_ruleset,
@@ -34,6 +35,7 @@ from runners import (
     ExtractionRunner,
     UnifiedRunner,
     build_zip,
+    build_runtime_config,
     load_history,
     delete_history_entry,
     HERE,
@@ -60,7 +62,7 @@ def _init_session_state() -> None:
 
 # ── Shared helpers ──
 
-def _run_with_progress(runner, key_prefix: str, label: str = "") -> None:
+def _run_with_progress(runner: CaptureRunner | ExtractionRunner | UnifiedRunner, key_prefix: str, label: str = "") -> None:
     """Generic progress loop for any runner with _thread, results, cancelled."""
     status_placeholder = st.empty()
     progress_bar = st.progress(0)
@@ -71,13 +73,19 @@ def _run_with_progress(runner, key_prefix: str, label: str = "") -> None:
         runner._thread = threading.Thread(target=runner.run, daemon=True)
         runner._thread.start()
 
+    start_time = time.time()
     alive = True
     while alive:
         alive = runner._thread.is_alive()
         done = getattr(runner, "progress_done", len(getattr(runner, "results", [])))
         total = getattr(runner, "progress_total", len(getattr(runner, "urls", [])))
         pct = min(done / total, 1.0) if total else 0
-        progress_bar.progress(pct, text=f"{done}/{total}")
+        elapsed = time.time() - start_time
+        eta_text = ""
+        if done > 0 and total > done:
+            eta_secs = int(elapsed / done * (total - done))
+            eta_text = f" | ETA ~{eta_secs}s"
+        progress_bar.progress(pct, text=f"{done}/{total}{eta_text}")
         status_placeholder.info(runner.status if hasattr(runner, "status") else label)
         if not alive:
             break
@@ -160,11 +168,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                     for k, v in row.items():
                         if k in ("png", "pdf", "file"):
                             continue
-                        st.text_input(
-                            k, value=str(v),
-                            key=f"{key_prefix}detail_{k}_{idx}",
-                            label_visibility="collapsed",
-                        )
+                        st.text(f"{k}: {v}")
 
                 notes_key = f"{key_prefix}notes_{idx}"
                 notes_val = st.session_state.get(notes_key, "")
@@ -242,7 +246,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
 def page_unified_crawl() -> None:
     """One batch, multiple collectors."""
     st.subheader("Unified Crawl")
-    st.caption("Run screenshots, SEO, extraction, link checks, and speed tests in a single browser session.")
+    st.caption("Run screenshots, SEO, and custom extraction in a single browser session.")
 
     for key, default in (("unified_runner", None), ("unified_running", False)):
         if key not in st.session_state:
@@ -290,12 +294,11 @@ def page_unified_crawl() -> None:
         else:
             output_dir = HERE / output_name
             output_dir.mkdir(parents=True, exist_ok=True)
-            runtime_cfg = {
-                "viewport": {"width": int(ss_width), "height": int(ss_height)},
-                "timing": {**CONFIG["timing"], "stabilization_ms": int(delay * 1000)},
-                "hide": CONFIG.get("hide", {}),
-                "hide_visibility": CONFIG.get("hide_visibility", {}),
-            }
+            runtime_cfg = build_runtime_config(
+                CONFIG,
+                viewport={"width": int(ss_width), "height": int(ss_height)},
+                stabilization_ms=int(delay * 1000),
+            )
             collectors: list[dict] = []
             if do_screenshot:
                 collectors.append({"name": "screenshot", "rules": None})
@@ -342,7 +345,7 @@ def _render_unified_results(runner: UnifiedRunner, key_prefix: str = "") -> None
         c1.metric("Total steps", total)
         c2.metric("OK", ok)
         c3.metric("Failed", total - ok)
-        st.code(str(output_dir))
+        st.caption(f"Output: `{output_dir}`")
         if "screenshot" in runner.results and runner.results["screenshot"]:
             st.download_button(
                 "Download Screenshots ZIP", data=build_zip(runner.results["screenshot"], output_dir),
@@ -444,12 +447,11 @@ def page_screenshots() -> None:
         else:
             output_dir = HERE / output_name
             output_dir.mkdir(parents=True, exist_ok=True)
-            runtime_cfg = {
-                "viewport": {"width": int(ss_width), "height": int(ss_height)},
-                "timing": {**CONFIG["timing"], "stabilization_ms": int(ss_delay * 1000)},
-                "hide": CONFIG.get("hide", {}),
-                "hide_visibility": CONFIG.get("hide_visibility", {}),
-            }
+            runtime_cfg = build_runtime_config(
+                CONFIG,
+                viewport={"width": int(ss_width), "height": int(ss_height)},
+                stabilization_ms=int(ss_delay * 1000),
+            )
             runner = CaptureRunner(urls, runtime_cfg, output_dir, "screenshot", generate_pdf=ss_pdf)
             st.session_state.runner = runner
             st.session_state.running = True
@@ -485,12 +487,11 @@ def page_extraction() -> None:
             else:
                 output_dir = HERE / seo_output_name
                 output_dir.mkdir(parents=True, exist_ok=True)
-                runtime_cfg = {
-                    "viewport": {**CONFIG["viewport"]},
-                    "timing": {**CONFIG["timing"], "stabilization_ms": int(seo_delay * 1000)},
-                    "hide": CONFIG.get("hide", {}),
-                    "hide_visibility": CONFIG.get("hide_visibility", {}),
-                }
+                runtime_cfg = build_runtime_config(
+                    CONFIG,
+                    viewport={**CONFIG["viewport"]},
+                    stabilization_ms=int(seo_delay * 1000),
+                )
                 runner = CaptureRunner(urls_seo, runtime_cfg, output_dir, "seo")
                 st.session_state.runner = runner
                 st.session_state.running = True
@@ -533,10 +534,22 @@ def page_settings() -> None:
         st.info("No output folders yet.")
     else:
         selected = st.selectbox("Select folder to clean", options=[str(f.relative_to(HERE)) for f in folders])
-        if selected and st.button("Delete selected folder"):
-            shutil.rmtree(HERE / selected)
-            st.success(f"Deleted {selected}")
-            st.rerun()
+        if selected:
+            if st.button("Delete selected folder", type="secondary"):
+                st.session_state["confirm_delete_folder"] = selected
+            if st.session_state.get("confirm_delete_folder") == selected:
+                st.warning(f"Delete `{selected}`? This cannot be undone.")
+                c_yes, c_no, _ = st.columns([1, 1, 4])
+                with c_yes:
+                    if st.button("Yes, delete", type="primary", key="confirm_del_yes"):
+                        shutil.rmtree(HERE / selected)
+                        st.session_state.pop("confirm_delete_folder", None)
+                        st.success(f"Deleted {selected}")
+                        st.rerun()
+                with c_no:
+                    if st.button("Cancel", key="confirm_del_no"):
+                        st.session_state.pop("confirm_delete_folder", None)
+                        st.rerun()
 
 
 def page_history() -> None:
@@ -546,8 +559,23 @@ def page_history() -> None:
         st.info("No runs yet.")
         return
 
+    search = st.text_input("Search", placeholder="Filter by URL or kind...", key="hist_search", label_visibility="collapsed")
+    filtered_indices = list(range(len(history)))
+    if search.strip():
+        q = search.strip().lower()
+        filtered_indices = [
+            i for i in filtered_indices
+            if q in history[i].get("kind", "").lower()
+            or any(q in r.get("url", "").lower() for r in history[i].get("results", []))
+            or any(q in r.get("source_url", "").lower() for r in history[i].get("results", []))
+        ]
+
+    if not filtered_indices:
+        st.info("No runs match the search.")
+        return
+
     selected_idx = st.selectbox(
-        "Select a past run to browse", options=range(len(history)),
+        "Select a past run to browse", options=filtered_indices,
         format_func=lambda i: f"{history[i]['timestamp'][:19]} — {history[i]['kind']} — {history[i]['ok']}/{history[i]['total']} OK",
         key="history_selector",
     )
@@ -558,7 +586,7 @@ def page_history() -> None:
 
     st.caption(f"Run at {entry['timestamp'][:19]} | {entry['total']} URLs | {entry['ok']} OK | {entry['fail']} fail")
 
-    col_rerun, col_delete, _ = st.columns([1, 1, 4])
+    col_rerun, col_delete, col_csv, col_zip, _ = st.columns([1, 1, 1, 1, 2])
     with col_rerun:
         if st.button("Re-run this job", key="hist_rerun"):
             urls_rerun = [r.get("url", r.get("source_url", "")) for r in results if r.get("url") or r.get("source_url")]
@@ -569,6 +597,24 @@ def page_history() -> None:
         if st.button("Delete from history", key="hist_del_entry"):
             delete_history_entry(selected_idx)
             st.rerun()
+    with col_csv:
+        if results and kind in ("seo", "extraction"):
+            csv_buf = io.StringIO()
+            writer = csv.DictWriter(csv_buf, fieldnames=results[0].keys())
+            writer.writeheader()
+            writer.writerows(results)
+            st.download_button(
+                "Download CSV", data=csv_buf.getvalue().encode(),
+                file_name=f"{kind}_results.csv", mime="text/csv",
+                key=f"hist_{selected_idx}_dl_csv",
+            )
+    with col_zip:
+        if kind == "screenshot" and results:
+            st.download_button(
+                "Download ZIP", data=build_zip(results, output_dir),
+                file_name="screenshots.zip", mime="application/zip",
+                key=f"hist_{selected_idx}_dl_zip",
+            )
 
     if kind == "unified":
         _render_history_unified(entry, selected_idx)
@@ -621,7 +667,6 @@ def _render_extraction_rules_tab() -> None:
         st.session_state.extraction_rules = rules
 
     if rules:
-        st.columns([2, 3, 1.5, 1.5, 0.8])
         header_cols = st.columns([2, 3, 1.5, 1.5, 0.8])
         header_cols[0].markdown("**Field**")
         header_cols[1].markdown("**Selector**")
@@ -647,6 +692,31 @@ def _render_extraction_rules_tab() -> None:
             "name": "", "selector": "", "type": "text", "attribute": "", "regex": "", "multiple": False,
         })
         st.rerun()
+
+    if rules:
+        with st.expander("Test Rules (live preview)", expanded=False):
+            preview_url = st.text_input("Test URL", placeholder="https://example.com", key="er_preview_url")
+            if preview_url and st.button("Test", key="er_preview_btn"):
+                if not is_valid_url(preview_url):
+                    st.error("Invalid URL.")
+                else:
+                    from extraction import extract_from_page
+                    try:
+                        runtime_cfg = build_runtime_config(CONFIG, CONFIG["viewport"], CONFIG["timing"]["stabilization_ms"])
+                        with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
+                            page = PageCapture(sb, runtime_cfg)
+                            page.open(preview_url)
+                            page.scroll()
+                            sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
+                            page.hide_overlays()
+                            data = extract_from_page(sb, rules)
+                            if data:
+                                for k, v in data.items():
+                                    st.text(f"{k}: {v}")
+                            else:
+                                st.info("No data extracted. Check your selectors.")
+                    except Exception as e:
+                        st.error(f"Preview failed: {e}")
 
     st.markdown("---")
     col_save, col_load, col_del, _ = st.columns([1, 1, 1, 4])
@@ -692,12 +762,11 @@ def _render_extraction_rules_tab() -> None:
         else:
             output_dir = HERE / ext_output
             output_dir.mkdir(parents=True, exist_ok=True)
-            runtime_cfg = {
-                "viewport": {**CONFIG["viewport"]},
-                "timing": {**CONFIG["timing"], "stabilization_ms": int(ext_delay * 1000)},
-                "hide": CONFIG.get("hide", {}),
-                "hide_visibility": CONFIG.get("hide_visibility", {}),
-            }
+            runtime_cfg = build_runtime_config(
+                CONFIG,
+                viewport={**CONFIG["viewport"]},
+                stabilization_ms=int(ext_delay * 1000),
+            )
             runner = ExtractionRunner(parsed, rules, runtime_cfg, output_dir)
             st.session_state.extraction_runner = runner
             st.session_state.running = True
@@ -710,6 +779,36 @@ def _render_extraction_rules_tab() -> None:
         render_results(runner.results, "extraction", runner.output_dir, key_prefix="ext_")
 
 
+# ── Dashboard ──
+
+def page_dashboard() -> None:
+    st.subheader("Dashboard")
+    history = load_history()
+    if not history:
+        st.info("No runs yet. Start a crawl to see metrics here.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    total_runs = len(history)
+    total_urls = sum(h.get("total", 0) for h in history)
+    total_ok = sum(h.get("ok", 0) for h in history)
+    total_fail = sum(h.get("fail", 0) for h in history)
+    c1.metric("Total Runs", total_runs)
+    c2.metric("URLs Crawled", total_urls)
+    c3.metric("Succeeded", total_ok)
+    c4.metric("Failed", total_fail)
+
+    st.markdown("---")
+    st.markdown("**Last 5 Runs**")
+    for entry in history[:5]:
+        ts = entry["timestamp"][:19]
+        kind = entry.get("kind", "unknown")
+        ok = entry.get("ok", 0)
+        total = entry.get("total", 0)
+        fail = entry.get("fail", 0)
+        st.caption(f"{ts} | {kind} | {ok}/{total} OK | {fail} failed")
+
+
 # ── Router ──
 
 def main() -> None:
@@ -718,7 +817,8 @@ def main() -> None:
 
     pages = {
         "Capture": [
-            st.Page(page_unified_crawl, title="Unified Crawl", icon=":material/rocket_launch:", default=True),
+            st.Page(page_dashboard, title="Dashboard", icon=":material/dashboard:", default=True),
+            st.Page(page_unified_crawl, title="Unified Crawl", icon=":material/rocket_launch:"),
             st.Page(page_screenshots, title="Screenshots", icon=":material/photo_camera:"),
             st.Page(page_extraction, title="Data Extraction", icon=":material/data_object:"),
         ],

@@ -30,6 +30,51 @@ def slugify(url: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", base).strip("_")
 
 
+def parse_seo_payload(raw: str) -> dict:
+    """Parse the raw JSON string returned by _seo_js() into a flat dict."""
+    payload = json.loads(raw or "{}")
+    return {
+        "title": payload.get("title", ""),
+        "title_len": len(payload.get("title", "")),
+        "meta_description": payload.get("metaDesc", ""),
+        "meta_desc_len": len(payload.get("metaDesc", "")),
+        "canonical": payload.get("canonical", ""),
+        "robots_meta": payload.get("robotsMeta", ""),
+        "h1": payload.get("h1", ""),
+        "h2s": payload.get("h2s", ""),
+        "h3s": payload.get("h3s", ""),
+        "og_title": payload.get("ogTitle", ""),
+        "og_description": payload.get("ogDesc", ""),
+        "og_image": payload.get("ogImage", ""),
+        "schema_types": payload.get("schemaTypes", ""),
+        "word_count": payload.get("wordCount", 0),
+        "internal_links": payload.get("internal", 0),
+        "external_links": payload.get("external", 0),
+        "images_missing_alt": payload.get("imagesMissingAlt", 0),
+    }
+
+
+def write_results_csv(results: list[dict], csv_path: Path) -> None:
+    """Write a list of result dicts to a CSV file."""
+    if not results:
+        return
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=results[0].keys())
+        w.writeheader()
+        w.writerows(results)
+
+
+def build_runtime_config(CONFIG: dict, viewport: dict, stabilization_ms: int) -> dict:
+    """Build the runtime config dict from global CONFIG and per-run overrides."""
+    return {
+        "viewport": viewport,
+        "timing": {**CONFIG["timing"], "stabilization_ms": stabilization_ms},
+        "hide": CONFIG.get("hide", {}),
+        "hide_visibility": CONFIG.get("hide_visibility", {}),
+    }
+
+
 def _seo_js() -> str:
     return r"""
 (() => {
@@ -126,7 +171,7 @@ def delete_history_entry(index: int) -> None:
 
 
 class CaptureRunner:
-    def __init__(self, urls, runtime_cfg, output_dir, kind="screenshot", generate_pdf=False):
+    def __init__(self, urls: list[str], runtime_cfg: dict, output_dir: Path, kind: str = "screenshot", generate_pdf: bool = False):
         self.urls = urls
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
@@ -166,27 +211,7 @@ class CaptureRunner:
                     page.hide_overlays()
                     if kind == "seo":
                         raw = sb.cdp.evaluate(_seo_js())
-                        payload = json.loads(raw or "{}")
-                        row = {
-                            "url": url, "status": "ok",
-                            "title": payload.get("title", ""),
-                            "title_len": len(payload.get("title", "")),
-                            "meta_description": payload.get("metaDesc", ""),
-                            "meta_desc_len": len(payload.get("metaDesc", "")),
-                            "canonical": payload.get("canonical", ""),
-                            "robots_meta": payload.get("robotsMeta", ""),
-                            "h1": payload.get("h1", ""),
-                            "h2s": payload.get("h2s", ""),
-                            "h3s": payload.get("h3s", ""),
-                            "og_title": payload.get("ogTitle", ""),
-                            "og_description": payload.get("ogDesc", ""),
-                            "og_image": payload.get("ogImage", ""),
-                            "schema_types": payload.get("schemaTypes", ""),
-                            "word_count": payload.get("wordCount", 0),
-                            "internal_links": payload.get("internal", 0),
-                            "external_links": payload.get("external", 0),
-                            "images_missing_alt": payload.get("imagesMissingAlt", 0),
-                        }
+                        row = {"url": url, "status": "ok", **parse_seo_payload(raw)}
                     else:
                         png_path = photos_dir / f"{slug}.png"
                         page.capture_png(png_path)
@@ -196,10 +221,11 @@ class CaptureRunner:
                             pdf_dir.mkdir(parents=True, exist_ok=True)
                             pdf_path = pdf_dir / f"{slug}.pdf"
                             png_to_pdf(png_path, pdf_path)
+                        page_data = page.extract_data()
                         row = {
                             "url": url, "status": "ok",
-                            "page_name": (page.extract_data()).get("page_name", ""),
-                            "h1": (page.extract_data()).get("h1", ""),
+                            "page_name": page_data.get("page_name", ""),
+                            "h1": page_data.get("h1", ""),
                             "file": str(png_path),
                             "pdf": str(pdf_path) if pdf_path else "",
                         }
@@ -212,11 +238,7 @@ class CaptureRunner:
                 ))
 
         csv_path = data_dir / ("seo_results.csv" if kind == "seo" else "capture_results.csv")
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
-            if results:
-                w = csv.DictWriter(f, fieldnames=results[0].keys())
-                w.writeheader()
-                w.writerows(results)
+        write_results_csv(results, csv_path)
 
         timestamp = datetime.now().isoformat()
         total = len(results)
@@ -233,7 +255,7 @@ class CaptureRunner:
 
 
 class ExtractionRunner:
-    def __init__(self, urls, rules, runtime_cfg, output_dir):
+    def __init__(self, urls: list[str], rules: list[dict], runtime_cfg: dict, output_dir: Path):
         self.urls = urls
         self.rules = rules
         self.runtime_cfg = runtime_cfg
@@ -278,11 +300,7 @@ class ExtractionRunner:
                 ))
 
         csv_path = data_dir / "extraction_results.csv"
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
-            if results:
-                w = csv.DictWriter(f, fieldnames=results[0].keys())
-                w.writeheader()
-                w.writerows(results)
+        write_results_csv(results, csv_path)
 
         timestamp = datetime.now().isoformat()
         total = len(results)
@@ -307,7 +325,7 @@ class UnifiedRunner:
 
     _thread: Optional[threading.Thread]
 
-    def __init__(self, urls, collectors, rules, runtime_cfg, output_dir):
+    def __init__(self, urls: list[str], collectors: list[dict], rules: list[dict], runtime_cfg: dict, output_dir: Path):
         self.urls = urls
         self.collectors = collectors
         self.rules = rules
@@ -377,10 +395,11 @@ class UnifiedRunner:
                         try:
                             png_path = photos_dir / f"{slug}.png"
                             page.capture_png(png_path)
+                            page_data = page.extract_data()
                             ss_row = {
                                 "url": url, "status": "ok",
-                                "page_name": (page.extract_data()).get("page_name", ""),
-                                "h1": (page.extract_data()).get("h1", ""),
+                                "page_name": page_data.get("page_name", ""),
+                                "h1": page_data.get("h1", ""),
                                 "file": str(png_path),
                             }
                         except Exception as exc:
@@ -394,27 +413,7 @@ class UnifiedRunner:
                     if ok:
                         try:
                             raw = sb.cdp.evaluate(_seo_js())
-                            payload = json.loads(raw or "{}")
-                            seo_row = {
-                                "url": url, "status": "ok",
-                                "title": payload.get("title", ""),
-                                "title_len": len(payload.get("title", "")),
-                                "meta_description": payload.get("metaDesc", ""),
-                                "meta_desc_len": len(payload.get("metaDesc", "")),
-                                "canonical": payload.get("canonical", ""),
-                                "robots_meta": payload.get("robotsMeta", ""),
-                                "h1": payload.get("h1", ""),
-                                "h2s": payload.get("h2s", ""),
-                                "h3s": payload.get("h3s", ""),
-                                "og_title": payload.get("ogTitle", ""),
-                                "og_description": payload.get("ogDesc", ""),
-                                "og_image": payload.get("ogImage", ""),
-                                "schema_types": payload.get("schemaTypes", ""),
-                                "word_count": payload.get("wordCount", 0),
-                                "internal_links": payload.get("internal", 0),
-                                "external_links": payload.get("external", 0),
-                                "images_missing_alt": payload.get("imagesMissingAlt", 0),
-                            }
+                            seo_row = {"url": url, "status": "ok", **parse_seo_payload(raw)}
                         except Exception as exc:
                             seo_row = {"url": url, "status": f"error: {exc}"}
                     else:
@@ -446,10 +445,7 @@ class UnifiedRunner:
             if not rows:
                 continue
             csv_path = data_dir / f"{kind}_results.csv"
-            with csv_path.open("w", newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, fieldnames=rows[0].keys())
-                w.writeheader()
-                w.writerows(rows)
+            write_results_csv(rows, csv_path)
 
         total = sum(len(r) for r in self.results.values())
         ok_count = sum(

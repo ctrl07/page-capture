@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": ["npx", "-y", "@upstash/context7-mcp@latest"],
+      "enabled": true
+    }
+  },
+  "agent": {
+    "seleniumbase-cdp": {
+      "description": "Expert in SeleniumBase CDP browser automation for the Page Capture app. Use when working with browser interaction, CDP evaluation, page capture, overlay hiding, Google Maps scraping, or any sb.cdp.evaluate() patterns. Do NOT use for Streamlit UI work.",
+      "mode": "subagent"
+    },
+    "streamlit-ui": {
+      "description": "Expert in Streamlit UI patterns for the Page Capture desktop app. Use when building tabs, forms, session state, progress indicators, data tables, download buttons, or any st.* widget. Do NOT use for browser automation or geocoding.",
+      "mode": "subagent"
+    },
+    "api-writer": {
+      "description": "Writes REST/GraphQL APIs for external apps. Use when creating API endpoints, FastAPI/Flask routes, request/response models, authentication, database schemas, or API documentation.",
+      "mode": "subagent"
+    }
+  }
+}

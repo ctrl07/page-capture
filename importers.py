@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import re
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -27,6 +26,7 @@ def is_valid_url(url: str) -> bool:
 
 
 def parse_urls_text(raw: str) -> list[str]:
+    seen: set[str] = set()
     cleaned: list[str] = []
     for line in raw.replace("\r\n", "\n").split("\n"):
         line = line.strip()
@@ -36,7 +36,9 @@ def parse_urls_text(raw: str) -> list[str]:
             token = token.strip()
             if not token or token.startswith("#"):
                 continue
-            cleaned.append(token)
+            if token not in seen:
+                seen.add(token)
+                cleaned.append(token)
     return cleaned
 
 

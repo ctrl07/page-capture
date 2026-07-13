@@ -1,6 +1,7 @@
 """PageCapture — Page Object Model for full-page PNG + PDF capture.
 """
 import base64
+import json
 from pathlib import Path
 import mycdp
 import yaml
@@ -123,7 +124,6 @@ class PageCapture:
         )
         self.sb.sleep(0.5)
         if self._selectors:
-            import json
             sel_json = json.dumps(self._selectors)
             self.sb.cdp.evaluate(f"""
             (() => {{
@@ -169,7 +169,6 @@ class PageCapture:
         """Remove all elements matching the hide-config selectors from the DOM."""
         if not self._selectors:
             return
-        import json
         sel_json = json.dumps(self._selectors)
         self.sb.cdp.evaluate(f"""
         (() => {{
