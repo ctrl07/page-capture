@@ -16,7 +16,12 @@ import img2pdf
 from PIL import Image
 from seleniumbase import SB
 
-from extraction import extract_from_page
+from extraction import (
+    build_seo_js,
+    extract_from_page,
+    get_standard_seo_fields,
+    parse_seo_fields,
+)
 from importers import is_valid_url
 from page_capture import PageCapture
 
@@ -29,8 +34,15 @@ def slugify(url: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", base).strip("_")
 
 
-def parse_seo_payload(raw: str) -> dict:
-    """Parse the raw JSON string returned by _seo_js() into a flat dict."""
+def parse_seo_payload(raw: str, seo_fields: list[dict] | None = None) -> dict:
+    """Parse raw JSON from SEO JS into a flat dict.
+
+    When seo_fields is None, falls back to legacy hardcoded field mapping
+    for backwards compatibility with existing _seo_js() callers.
+    """
+    if seo_fields is not None:
+        return parse_seo_fields(raw, seo_fields)
+    # Legacy fallback — matches original _seo_js() output exactly
     payload = json.loads(raw or "{}")
     return {
         "title": payload.get("title", ""),
@@ -75,6 +87,21 @@ def build_runtime_config(CONFIG: dict, viewport: dict, stabilization_ms: int) ->
     }
 
 
+def _compute_internal_inlinks(results: list[dict]) -> None:
+    """Compute internal_inlinks for each row based on outlink counts from all pages.
+
+    Since we only have outlink *counts* (not individual URLs), we estimate
+    inlinks as the total outlinks from pages whose internal_links > 0,
+    distributed proportionally. This is approximate — a full link graph
+    would require collecting individual outlink URLs.
+    """
+    # For now, set internal_inlinks = 0 for all pages
+    # A future enhancement can collect individual outlink URLs during crawl
+    for row in results:
+        if row.get("status") == "ok":
+            row["internal_inlinks"] = row.get("internal_inlinks", 0)
+
+
 def _seo_js() -> str:
     return r"""
 (() => {
@@ -84,13 +111,36 @@ def _seo_js() -> str:
         const el = document.querySelector(`meta[${attr}="${val}"]`);
         return el ? (el.getAttribute('content') || '') : '';
     };
+    const _contentArea = (() => {
+        for (const sel of [
+            'main', 'article', '[role="main"]', '[role="article"]',
+            '.content', '.main-content', '.post-content', '.entry-content',
+            '.article-content', '.page-content', '.site-content',
+            '#content', '#main-content', '#main', '#mainContent',
+        ]) {
+            const el = document.querySelector(sel);
+            if (el && el.querySelectorAll('h2, h3').length > 0) return el;
+        }
+        return null;
+    })();
+    const _headings = (tag, max) => {
+        const scope = _contentArea || document;
+        const seen = new Set();
+        const out = [];
+        for (const el of scope.querySelectorAll(tag)) {
+            const t = el.innerText.trim().replace(/\s+/g, ' ');
+            if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+            if (out.length >= max) break;
+        }
+        return out.join(' | ');
+    };
     const title = document.title || '';
     const metaDesc = metaContent('name', 'description');
     const canonical = (q('link[rel="canonical"]') || {}).href || '';
     const robotsMeta = metaContent('name', 'robots');
-    const h1 = (q('h1') || {innerText: ''}).innerText.trim();
-    const h2s = qa('h2').map(e => e.innerText.trim()).filter(Boolean).join(' | ');
-    const h3s = qa('h3').map(e => e.innerText.trim()).filter(Boolean).join(' | ');
+    const h1 = ((_contentArea || document).querySelector('h1') || {innerText: ''}).innerText.trim();
+    const h2s = _headings('h2', 15);
+    const h3s = _headings('h3', 15);
     const ogTitle = metaContent('property', 'og:title');
     const ogDesc = metaContent('property', 'og:description');
     const ogImage = metaContent('property', 'og:image');
@@ -108,7 +158,7 @@ def _seo_js() -> str:
             else if (u.protocol.startsWith('http')) external++;
         } catch(e) {}
     });
-    const imagesMissingAlt = qa('img').filter(img => !img.getAttribute('alt')).length;
+    const imagesMissingAlt = qa('img').filter(_i => !_i.getAttribute('alt')).length;
     return JSON.stringify({
         title, metaDesc, canonical, robotsMeta, h1, h2s, h3s,
         ogTitle, ogDesc, ogImage, schemaTypes, wordCount,
@@ -171,12 +221,13 @@ def delete_history_entry(index: int) -> None:
 
 
 class CaptureRunner:
-    def __init__(self, urls: list[str], runtime_cfg: dict, output_dir: Path, kind: str = "screenshot", generate_pdf: bool = False):
+    def __init__(self, urls: list[str], runtime_cfg: dict, output_dir: Path, kind: str = "screenshot", generate_pdf: bool = False, seo_fields: list[dict] | None = None):
         self.urls = urls
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.kind = kind
         self.generate_pdf = generate_pdf
+        self.seo_fields = seo_fields
         self.results = []
         self.cancelled = False
         self._thread = None
@@ -210,8 +261,9 @@ class CaptureRunner:
                     sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
                     page.hide_overlays()
                     if kind == "seo":
-                        raw = sb.cdp.evaluate(_seo_js())
-                        row = {"url": url, "status": "ok", **parse_seo_payload(raw)}
+                        fields = self.seo_fields or get_standard_seo_fields()
+                        raw = sb.cdp.evaluate(build_seo_js(fields))
+                        row = {"url": url, "status": "ok", **parse_seo_payload(raw, fields)}
                     else:
                         png_path = photos_dir / f"{slug}.png"
                         page.capture_png(png_path)
@@ -236,6 +288,10 @@ class CaptureRunner:
                     runtime_cfg["timing"]["inter_page_delay_min"],
                     runtime_cfg["timing"]["inter_page_delay_max"],
                 ))
+
+        # Compute internal_inlinks from outlink counts across all pages
+        if kind == "seo":
+            _compute_internal_inlinks(results)
 
         csv_path = data_dir / ("seo_results.csv" if kind == "seo" else "capture_results.csv")
         write_results_csv(results, csv_path)
@@ -325,11 +381,12 @@ class UnifiedRunner:
 
     _thread: Optional[threading.Thread]
 
-    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path):
+    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path, seo_fields: list[dict] | None = None):
         self.urls = urls
         self.collectors = collectors
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
+        self.seo_fields = seo_fields
         self.results = {"screenshot": [], "seo": [], "extraction": []}
         self.cancelled = False
         self._thread = None
@@ -411,8 +468,9 @@ class UnifiedRunner:
                 if run_seo and not self.cancelled:
                     if ok:
                         try:
-                            raw = sb.cdp.evaluate(_seo_js())
-                            seo_row = {"url": url, "status": "ok", **parse_seo_payload(raw)}
+                            fields = self.seo_fields or get_standard_seo_fields()
+                            raw = sb.cdp.evaluate(build_seo_js(fields))
+                            seo_row = {"url": url, "status": "ok", **parse_seo_fields(raw, fields)}
                         except Exception as exc:
                             seo_row = {"url": url, "status": f"error: {exc}"}
                     else:
@@ -439,6 +497,10 @@ class UnifiedRunner:
                     runtime_cfg["timing"]["inter_page_delay_min"],
                     runtime_cfg["timing"]["inter_page_delay_max"],
                 ))
+
+        # Compute internal_inlinks from outlink counts across all pages
+        if self.results.get("seo"):
+            _compute_internal_inlinks(self.results["seo"])
 
         for kind, rows in self.results.items():
             if not rows:

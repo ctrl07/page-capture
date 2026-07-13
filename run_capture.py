@@ -41,13 +41,36 @@ def _seo_js() -> str:
         const el = document.querySelector(`meta[${attr}="${val}"]`);
         return el ? (el.getAttribute('content') || '') : '';
     };
+    const _contentArea = (() => {
+        for (const sel of [
+            'main', 'article', '[role="main"]', '[role="article"]',
+            '.content', '.main-content', '.post-content', '.entry-content',
+            '.article-content', '.page-content', '.site-content',
+            '#content', '#main-content', '#main', '#mainContent',
+        ]) {
+            const el = document.querySelector(sel);
+            if (el && el.querySelectorAll('h2, h3').length > 0) return el;
+        }
+        return null;
+    })();
+    const _headings = (tag, max) => {
+        const scope = _contentArea || document;
+        const seen = new Set();
+        const out = [];
+        for (const el of scope.querySelectorAll(tag)) {
+            const t = el.innerText.trim().replace(/\s+/g, ' ');
+            if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+            if (out.length >= max) break;
+        }
+        return out.join(' | ');
+    };
     const title = document.title || '';
     const metaDesc = metaContent('name', 'description');
     const canonical = (q('link[rel="canonical"]') || {}).href || '';
     const robotsMeta = metaContent('name', 'robots');
-    const h1 = (q('h1') || {innerText: ''}).innerText.trim();
-    const h2s = qa('h2').map(e => e.innerText.trim()).filter(Boolean).join(' | ');
-    const h3s = qa('h3').map(e => e.innerText.trim()).filter(Boolean).join(' | ');
+    const h1 = ((_contentArea || document).querySelector('h1') || {innerText: ''}).innerText.trim();
+    const h2s = _headings('h2', 15);
+    const h3s = _headings('h3', 15);
     const ogTitle = metaContent('property', 'og:title');
     const ogDesc = metaContent('property', 'og:description');
     const ogImage = metaContent('property', 'og:image');
@@ -65,7 +88,7 @@ def _seo_js() -> str:
             else if (u.protocol.startsWith('http')) external++;
         } catch(e) {}
     });
-    const imagesMissingAlt = qa('img').filter(img => !img.getAttribute('alt')).length;
+    const imagesMissingAlt = qa('img').filter(_i => !_i.getAttribute('alt')).length;
     return JSON.stringify({
         title, metaDesc, canonical, robotsMeta, h1, h2s, h3s,
         ogTitle, ogDesc, ogImage, schemaTypes, wordCount,

@@ -1,0 +1,19 @@
+[
+  {"name": "title", "description": "Page <title> tag", "category": "meta", "type": "builtin", "js_key": "title"},
+  {"name": "title_len", "description": "Character count of title", "category": "meta", "type": "derived", "derived_from": "title"},
+  {"name": "meta_description", "description": "Meta description content", "category": "meta", "type": "meta", "selector": "meta[name=\"description\"]", "attribute": "name"},
+  {"name": "meta_desc_len", "description": "Character count of meta description", "category": "meta", "type": "derived", "derived_from": "meta_description"},
+  {"name": "canonical", "description": "Canonical link href", "category": "meta", "type": "builtin", "js_key": "canonical"},
+  {"name": "robots_meta", "description": "Meta robots directive", "category": "meta", "type": "meta", "selector": "meta[name=\"robots\"]", "attribute": "name"},
+  {"name": "h1", "description": "First H1 heading", "category": "headings", "type": "builtin", "js_key": "h1"},
+  {"name": "h2s", "description": "All H2 headings (pipe-separated)", "category": "headings", "type": "builtin", "js_key": "h2s"},
+  {"name": "h3s", "description": "All H3 headings (pipe-separated)", "category": "headings", "type": "builtin", "js_key": "h3s"},
+  {"name": "og_title", "description": "Open Graph title", "category": "open_graph", "type": "meta", "selector": "meta[property=\"og:title\"]", "attribute": "property"},
+  {"name": "og_description", "description": "Open Graph description", "category": "open_graph", "type": "meta", "selector": "meta[property=\"og:description\"]", "attribute": "property"},
+  {"name": "og_image", "description": "Open Graph image URL", "category": "open_graph", "type": "meta", "selector": "meta[property=\"og:image\"]", "attribute": "property"},
+  {"name": "schema_types", "description": "JSON-LD @type values (pipe-separated)", "category": "schema", "type": "builtin", "js_key": "schemaTypes"},
+  {"name": "word_count", "description": "Total word count", "category": "technical", "type": "builtin", "js_key": "wordCount"},
+  {"name": "internal_links", "description": "Internal link count", "category": "links", "type": "builtin", "js_key": "internal"},
+  {"name": "external_links", "description": "External link count", "category": "links", "type": "builtin", "js_key": "external"},
+  {"name": "images_missing_alt", "description": "Images missing alt attribute", "category": "images", "type": "builtin", "js_key": "imagesMissingAlt"}
+]

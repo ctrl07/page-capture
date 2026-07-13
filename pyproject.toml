@@ -9,6 +9,7 @@ dependencies = [
     "pandas>=2.2",
     "img2pdf>=0.5",
     "Pillow>=10.0",
+    "fpdf2>=2.8.0",
 ]
 
 [project.optional-dependencies]
@@ -24,10 +25,11 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+ignore = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.10"
-include = ["app.py", "runners.py", "extraction.py", "importers.py", "page_capture.py"]
+include = ["app.py", "runners.py", "extraction.py", "importers.py", "page_capture.py", "analysis.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
