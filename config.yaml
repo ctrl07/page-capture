@@ -1,9 +1,9 @@
 timing:
   reconnect_ms: 3000
-  scroll_interval_ms: 600
-  stabilization_ms: 2500
-  inter_page_delay_min: 1.0
-  inter_page_delay_max: 2.0
+  scroll_interval_ms: 100
+  stabilization_ms: 800
+  inter_page_delay_min: 0.3
+  inter_page_delay_max: 0.5
 
 viewport:
   width: 1920

@@ -7,4 +7,6 @@ dependencies = [
     "seleniumbase>=4.36.0",
     "pyyaml>=6.0",
     "pandas>=2.2",
+    "img2pdf>=0.5",
+    "Pillow>=10.0",
 ]
