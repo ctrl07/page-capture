@@ -9,17 +9,16 @@ import threading
 import time
 import zipfile
 from datetime import datetime
-from typing import Optional
 from pathlib import Path
+from typing import Optional
 
 import img2pdf
 from PIL import Image
-
-from page_capture import PageCapture
 from seleniumbase import SB
 
 from extraction import extract_from_page
 from importers import is_valid_url
+from page_capture import PageCapture
 
 HERE = Path(__file__).resolve().parent
 HISTORY_FILE = HERE / ".run_history.json"

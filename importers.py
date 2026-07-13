@@ -9,7 +9,6 @@ from urllib.parse import urlparse
 
 import requests
 
-
 __all__ = [
     "import_from_sitemap_url",
     "import_from_sitemap_xml",

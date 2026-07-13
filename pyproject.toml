@@ -10,3 +10,25 @@ dependencies = [
     "img2pdf>=0.5",
     "Pillow>=10.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "pyright>=1.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+include = ["app.py", "runners.py", "extraction.py", "importers.py", "page_capture.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

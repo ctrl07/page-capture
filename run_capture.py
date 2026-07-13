@@ -12,10 +12,16 @@ import sys
 import time
 from pathlib import Path
 
-from page_capture import PageCapture, load_config
 from seleniumbase import SB
 
-from importers import import_from_sitemap_url, import_from_sitemap_xml, import_from_csv_file, import_from_wp_xml, parse_urls_text
+from importers import (
+    import_from_csv_file,
+    import_from_sitemap_url,
+    import_from_sitemap_xml,
+    import_from_wp_xml,
+    parse_urls_text,
+)
+from page_capture import PageCapture, load_config
 
 HERE = Path(__file__).resolve().parent
 CONFIG = load_config(HERE / "config.yaml")
@@ -148,7 +154,7 @@ def run_seo(urls: list[str]) -> list[dict]:
                     "external_links": payload.get("external", 0),
                     "images_missing_alt": payload.get("imagesMissingAlt", 0),
                 })
-                print(f"  -> OK")
+                print("  -> OK")
             except Exception as exc:
                 print(f"  -> FAIL: {exc}")
                 results.append({"url": url, "status": f"error: {exc}"})
