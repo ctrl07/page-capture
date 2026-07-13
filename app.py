@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import shutil
 import threading
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import yaml
 from seleniumbase import SB
 
 from page_capture import load_config, PageCapture
@@ -187,17 +189,21 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                                 key=f"{key_prefix}preview_pdf_{idx}",
                             )
 
-        if kind == "screenshot" and ok_count > 0:
+        if kind == "screenshot" and filtered:
+            zip_key = f"{key_prefix}zip_data"
+            if zip_key not in st.session_state:
+                st.session_state[zip_key] = build_zip(filtered, output_dir)
             st.download_button(
-                "Download ZIP", data=build_zip(results, output_dir),
+                "Download ZIP", data=st.session_state[zip_key],
                 file_name="screenshots.zip", mime="application/zip",
                 key=f"{key_prefix}dl_zip",
             )
-        if kind in ("seo", "extraction") and results:
+        if kind in ("seo", "extraction") and filtered:
+            all_keys = list(dict.fromkeys(k for r in filtered for k in r))
             csv_buf = io.StringIO()
-            writer = csv.DictWriter(csv_buf, fieldnames=results[0].keys())
+            writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
             writer.writeheader()
-            writer.writerows(results)
+            writer.writerows(filtered)
             st.download_button(
                 "Download CSV", data=csv_buf.getvalue().encode(),
                 file_name=f"{kind}_results.csv", mime="text/csv",
@@ -206,15 +212,16 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
 
     with tabs[2]:
         if kind == "screenshot":
-            png_files = [
-                r.get("file", "") for r in results
+            indexed = [
+                (r.get("file", ""), i)
+                for i, r in enumerate(results)
                 if r.get("file") and Path(r.get("file", "")).exists()
             ]
-            if not png_files:
+            if not indexed:
                 st.info("No screenshots available.")
             else:
                 selected = st.selectbox(
-                    "Choose screenshot", options=png_files,
+                    "Choose screenshot", options=[f for f, _ in indexed],
                     format_func=lambda x: Path(x).name, key=f"{key_prefix}preview_sel",
                 )
                 if selected:
@@ -227,8 +234,8 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                                 file_name=Path(selected).name,
                                 mime="image/png", key=f"{key_prefix}preview_dl",
                             )
-                    selected_idx = png_files.index(selected)
-                    pdf_file = results[selected_idx].get("pdf", "") if selected_idx < len(results) else ""
+                    sel_idx = next(i for f, i in indexed if f == selected)
+                    pdf_file = results[sel_idx].get("pdf", "")
                     if pdf_file and Path(pdf_file).exists():
                         with col_pdf:
                             with open(pdf_file, "rb") as f:
@@ -278,7 +285,7 @@ def page_unified_crawl() -> None:
         if do_extraction and not rules:
             st.warning("Custom Rules is enabled but no rules are defined.")
 
-        submitted = st.form_submit_button("Run Unified Crawl", disabled=st.session_state.unified_running)
+        submitted = st.form_submit_button("Run Unified Crawl", disabled=st.session_state.unified_running or st.session_state.running)
 
     if submitted:
         urls = parse_urls_text(urls_text or "")
@@ -292,7 +299,8 @@ def page_unified_crawl() -> None:
         elif do_extraction and not rules:
             st.warning("Custom Rules selected but no rules defined.")
         else:
-            output_dir = HERE / output_name
+            safe_name = re.sub(r"[^\w\-]", "_", output_name.strip())
+            output_dir = HERE / safe_name
             output_dir.mkdir(parents=True, exist_ok=True)
             runtime_cfg = build_runtime_config(
                 CONFIG,
@@ -307,7 +315,7 @@ def page_unified_crawl() -> None:
             if do_extraction:
                 collectors.append({"name": "extraction", "rules": rules})
 
-            runner = UnifiedRunner(urls, collectors, rules, runtime_cfg, output_dir)
+            runner = UnifiedRunner(urls, collectors, runtime_cfg, output_dir)
             st.session_state.unified_runner = runner
             st.session_state.unified_running = True
             st.session_state.capture_urls = urls
@@ -316,7 +324,10 @@ def page_unified_crawl() -> None:
         runner = st.session_state.unified_runner
         _run_with_progress(runner, "unified")
         st.session_state.unified_running = False
-        st.success(f"Done — {runner.progress_done}/{runner.progress_total} collector step(s) complete.")
+        if runner.cancelled:
+            st.warning(f"Cancelled — {runner.progress_done}/{runner.progress_total} collector step(s) complete.")
+        else:
+            st.success(f"Done — {runner.progress_done}/{runner.progress_total} collector step(s) complete.")
         _render_unified_results(runner, key_prefix="unified_")
 
 
@@ -420,7 +431,10 @@ def page_import() -> None:
 
 
 def page_screenshots() -> None:
-    default_ss = st.session_state.get("ss_urls_text", "")
+    st.subheader("Screenshots")
+    default_ss = ""
+    if st.session_state.get("capture_urls"):
+        default_ss = "\n".join(st.session_state.capture_urls)
     with st.form("ss_form"):
         urls_text = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", value=default_ss)
         col1, col2, col3 = st.columns(3)
@@ -435,7 +449,7 @@ def page_screenshots() -> None:
             ss_pdf = st.checkbox("Also save PDF", value=False, key="ss_pdf")
         with col5:
             output_name = st.text_input("Output folder name", value=f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        submitted = st.form_submit_button("Run Capture", disabled=st.session_state.running)
+        submitted = st.form_submit_button("Run Capture", disabled=st.session_state.running or st.session_state.unified_running)
 
     if submitted:
         urls = parse_urls_text(urls_text or "")
@@ -445,7 +459,8 @@ def page_screenshots() -> None:
         elif invalid:
             st.error(f"Invalid URLs: {', '.join(invalid)}")
         else:
-            output_dir = HERE / output_name
+            safe_name = re.sub(r"[^\w\-]", "_", output_name.strip())
+            output_dir = HERE / safe_name
             output_dir.mkdir(parents=True, exist_ok=True)
             runtime_cfg = build_runtime_config(
                 CONFIG,
@@ -460,7 +475,10 @@ def page_screenshots() -> None:
         runner = st.session_state.runner
         _run_with_progress(runner, "ss")
         st.session_state.running = False
-        st.success(f"Done — {len(runner.results)} URL(s) processed.")
+        if runner.cancelled:
+            st.warning(f"Cancelled — {len(runner.results)} URL(s) processed.")
+        else:
+            st.success(f"Done — {len(runner.results)} URL(s) processed.")
         render_results(runner.results, "screenshot", runner.output_dir, key_prefix="ss_")
 
 
@@ -470,12 +488,14 @@ def page_extraction() -> None:
 
     if extract_mode == "Quick SEO":
         st.caption("Extracts title, meta description, H1/H2/H3, Open Graph tags, schema markup, word count, link counts, and images missing alt text.")
-        default_seo = st.session_state.get("seo_urls_text", "")
+        default_seo = ""
+        if st.session_state.get("capture_urls"):
+            default_seo = "\n".join(st.session_state.capture_urls)
         with st.form("seo_form"):
             urls_text_seo = st.text_area("URLs (one per line)", height=150, placeholder="https://example.com\nhttps://example.org", value=default_seo, key="seo_urls")
             seo_delay = st.number_input("Delay (s)", value=CONFIG["timing"]["stabilization_ms"] / 1000, min_value=0.0, max_value=60.0, key="seo_delay")
             seo_output_name = st.text_input("Output folder name", value=f"seo_{datetime.now().strftime('%Y%m%d_%H%M%S')}", key="seo_output")
-            seo_submitted = st.form_submit_button("Run SEO Extraction", disabled=st.session_state.running)
+            seo_submitted = st.form_submit_button("Run SEO Extraction", disabled=st.session_state.running or st.session_state.unified_running)
 
         if seo_submitted:
             urls_seo = parse_urls_text(urls_text_seo or "")
@@ -485,7 +505,8 @@ def page_extraction() -> None:
             elif invalid:
                 st.error(f"Invalid URLs: {', '.join(invalid)}")
             else:
-                output_dir = HERE / seo_output_name
+                safe_name = re.sub(r"[^\w\-]", "_", seo_output_name.strip())
+                output_dir = HERE / safe_name
                 output_dir.mkdir(parents=True, exist_ok=True)
                 runtime_cfg = build_runtime_config(
                     CONFIG,
@@ -500,7 +521,10 @@ def page_extraction() -> None:
             runner = st.session_state.runner
             _run_with_progress(runner, "seo")
             st.session_state.running = False
-            st.success(f"Done — {len(runner.results)} URL(s) extracted.")
+            if runner.cancelled:
+                st.warning(f"Cancelled — {len(runner.results)} URL(s) extracted.")
+            else:
+                st.success(f"Done — {len(runner.results)} URL(s) extracted.")
             render_results(runner.results, "seo", runner.output_dir, key_prefix="seo_")
     else:
         _render_extraction_rules_tab()
@@ -515,15 +539,17 @@ def page_settings() -> None:
         new_min_delay = st.number_input("Inter-page delay min (s)", value=CONFIG["timing"]["inter_page_delay_min"], min_value=0.0, max_value=10.0)
         new_max_delay = st.number_input("Inter-page delay max (s)", value=CONFIG["timing"]["inter_page_delay_max"], min_value=0.0, max_value=10.0)
         if st.form_submit_button("Save"):
-            CONFIG["viewport"]["width"] = int(new_width)
-            CONFIG["viewport"]["height"] = int(new_height)
-            CONFIG["timing"]["stabilization_ms"] = int(new_stab)
-            CONFIG["timing"]["inter_page_delay_min"] = float(new_min_delay)
-            CONFIG["timing"]["inter_page_delay_max"] = float(new_max_delay)
-            import yaml
-            with open(HERE / "config.yaml", "w", encoding="utf-8") as f:
-                yaml.dump(CONFIG, f, default_flow_style=False)
-            st.success("Config saved to config.yaml")
+            try:
+                CONFIG["viewport"]["width"] = int(new_width)
+                CONFIG["viewport"]["height"] = int(new_height)
+                CONFIG["timing"]["stabilization_ms"] = int(new_stab)
+                CONFIG["timing"]["inter_page_delay_min"] = float(new_min_delay)
+                CONFIG["timing"]["inter_page_delay_max"] = float(new_max_delay)
+                with open(HERE / "config.yaml", "w", encoding="utf-8") as f:
+                    yaml.dump(CONFIG, f, default_flow_style=False)
+                st.success("Config saved to config.yaml")
+            except Exception as e:
+                st.error(f"Failed to save: {e}")
 
     st.subheader("Manage Output Folders")
     folders = sorted(
@@ -542,10 +568,13 @@ def page_settings() -> None:
                 c_yes, c_no, _ = st.columns([1, 1, 4])
                 with c_yes:
                     if st.button("Yes, delete", type="primary", key="confirm_del_yes"):
-                        shutil.rmtree(HERE / selected)
-                        st.session_state.pop("confirm_delete_folder", None)
-                        st.success(f"Deleted {selected}")
-                        st.rerun()
+                        try:
+                            shutil.rmtree(HERE / selected)
+                            st.session_state.pop("confirm_delete_folder", None)
+                            st.success(f"Deleted {selected}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to delete: {e}")
                 with c_no:
                     if st.button("Cancel", key="confirm_del_no"):
                         st.session_state.pop("confirm_delete_folder", None)
@@ -599,8 +628,9 @@ def page_history() -> None:
             st.rerun()
     with col_csv:
         if results and kind in ("seo", "extraction"):
+            all_keys = list(dict.fromkeys(k for r in results for k in r))
             csv_buf = io.StringIO()
-            writer = csv.DictWriter(csv_buf, fieldnames=results[0].keys())
+            writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(results)
             st.download_button(
@@ -663,8 +693,6 @@ def _rule_editor_row(i: int, rule: dict) -> None:
 def _render_extraction_rules_tab() -> None:
     st.caption("Define custom CSS selector rules to extract data from pages.")
     rules: list[dict] = st.session_state.get("extraction_rules", [])
-    if "extraction_rules" not in st.session_state:
-        st.session_state.extraction_rules = rules
 
     if rules:
         header_cols = st.columns([2, 3, 1.5, 1.5, 0.8])
@@ -701,22 +729,23 @@ def _render_extraction_rules_tab() -> None:
                     st.error("Invalid URL.")
                 else:
                     from extraction import extract_from_page
-                    try:
-                        runtime_cfg = build_runtime_config(CONFIG, CONFIG["viewport"], CONFIG["timing"]["stabilization_ms"])
-                        with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
-                            page = PageCapture(sb, runtime_cfg)
-                            page.open(preview_url)
-                            page.scroll()
-                            sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
-                            page.hide_overlays()
-                            data = extract_from_page(sb, rules)
-                            if data:
-                                for k, v in data.items():
-                                    st.text(f"{k}: {v}")
-                            else:
-                                st.info("No data extracted. Check your selectors.")
-                    except Exception as e:
-                        st.error(f"Preview failed: {e}")
+                    with st.spinner("Running preview (UI will freeze temporarily)..."):
+                        try:
+                            runtime_cfg = build_runtime_config(CONFIG, CONFIG["viewport"], CONFIG["timing"]["stabilization_ms"])
+                            with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
+                                page = PageCapture(sb, runtime_cfg)
+                                page.open(preview_url)
+                                page.scroll()
+                                sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
+                                page.hide_overlays()
+                                data = extract_from_page(sb, rules)
+                                if data:
+                                    for k, v in data.items():
+                                        st.text(f"{k}: {v}")
+                                else:
+                                    st.info("No data extracted. Check your selectors.")
+                        except Exception as e:
+                            st.error(f"Preview failed: {e}")
 
     st.markdown("---")
     col_save, col_load, col_del, _ = st.columns([1, 1, 1, 4])
@@ -745,12 +774,12 @@ def _render_extraction_rules_tab() -> None:
         st.info("Add at least one extraction rule above.")
         return
 
-    default_urls = st.session_state.get("seo_urls_text", "")
+    default_urls = st.session_state.get("seo_urls", "")
     with st.form("extraction_form"):
         ext_urls = st.text_area("URLs (one per line)", height=120, placeholder="https://example.com\nhttps://example.org", value=default_urls, key="ext_urls")
         ext_delay = st.number_input("Delay (s)", value=CONFIG["timing"]["stabilization_ms"] / 1000, min_value=0.0, max_value=60.0, key="ext_delay")
         ext_output = st.text_input("Output folder name", value=f"extraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}", key="ext_output")
-        ext_submitted = st.form_submit_button("Run Extraction", disabled=st.session_state.running)
+        ext_submitted = st.form_submit_button("Run Extraction", disabled=st.session_state.running or st.session_state.unified_running)
 
     if ext_submitted:
         parsed = parse_urls_text(ext_urls or "")
@@ -760,7 +789,8 @@ def _render_extraction_rules_tab() -> None:
         elif invalid:
             st.error(f"Invalid URLs: {', '.join(invalid)}")
         else:
-            output_dir = HERE / ext_output
+            safe_name = re.sub(r"[^\w\-]", "_", ext_output.strip())
+            output_dir = HERE / safe_name
             output_dir.mkdir(parents=True, exist_ok=True)
             runtime_cfg = build_runtime_config(
                 CONFIG,
@@ -775,7 +805,10 @@ def _render_extraction_rules_tab() -> None:
         runner = st.session_state.extraction_runner
         _run_with_progress(runner, "ext")
         st.session_state.running = False
-        st.success(f"Done — {len(runner.results)} URL(s) extracted.")
+        if runner.cancelled:
+            st.warning(f"Cancelled — {len(runner.results)} URL(s) extracted.")
+        else:
+            st.success(f"Done — {len(runner.results)} URL(s) extracted.")
         render_results(runner.results, "extraction", runner.output_dir, key_prefix="ext_")
 
 

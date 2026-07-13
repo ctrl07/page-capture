@@ -105,9 +105,9 @@ class PageCapture:
     def scroll(self):
         total = self.sb.cdp.evaluate(
             "(document.documentElement || document.body || {scrollHeight:0}).scrollHeight"
-        )
-        step = self.sb.cdp.evaluate("Math.round(window.innerHeight * 0.8)")
-        steps = max(1, int(total / (step or 1)) + 1)
+        ) or 0
+        step = self.sb.cdp.evaluate("Math.round(window.innerHeight * 0.8)") or 1
+        steps = max(1, int(total / step) + 1)
         delay = self.timing.get("scroll_interval_ms", 100) / 1000
         for _ in range(steps):
             self.sb.cdp.scroll_down(amount=step)
@@ -116,25 +116,14 @@ class PageCapture:
         self.sb.sleep(delay)
 
     def hide_overlays(self):
-        escaped = self.css.replace("\\", "\\\\").replace("`", "\\`")
+        escaped = self.css.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
         self.sb.cdp.execute_script(
             f"(function(){{var s=document.createElement('style');"
             f"s.textContent=`{escaped}`;"
             f"(document.head||document.documentElement).appendChild(s);}})()"
         )
         self.sb.sleep(0.5)
-        if self._selectors:
-            sel_json = json.dumps(self._selectors)
-            self.sb.cdp.evaluate(f"""
-            (() => {{
-                const sels = {sel_json};
-                sels.forEach(sel => {{
-                    try {{
-                        document.querySelectorAll(sel).forEach(el => el.remove());
-                    }} catch(e) {{}}
-                }});
-            }})()
-            """)
+        self._remove_configured_elements()
         self.sb.cdp.evaluate("""
         (() => {
             const vw = window.innerWidth, vh = window.innerHeight;
@@ -157,8 +146,11 @@ class PageCapture:
         """)
 
     def _content_height(self) -> int:
-        metrics = _run(self.sb, mycdp.page.get_layout_metrics())
-        h = int(metrics[5].height) if metrics[5] else 0
+        try:
+            metrics = _run(self.sb, mycdp.page.get_layout_metrics())
+            h = int(metrics.cssContentSize.height) if metrics.cssContentSize else 0
+        except Exception:
+            h = 0
         if not h:
             h = self.sb.cdp.evaluate(
                 "(document.documentElement || document.body || {scrollHeight:0}).scrollHeight"
@@ -189,47 +181,18 @@ class PageCapture:
         _run(self.sb, mycdp.emulation.set_device_metrics_override(
             width=w, height=height, device_scale_factor=1, mobile=False
         ))
-        self._remove_configured_elements()
-        data = _run(self.sb, mycdp.page.capture_screenshot(
-            format_="png",
-            clip=mycdp.page.Viewport(x=0, y=0, width=w, height=height, scale=1),
-            capture_beyond_viewport=True,
-        ))
-        path.write_bytes(base64.b64decode(data))
-        _run(self.sb, mycdp.emulation.set_device_metrics_override(
-            width=w, height=self.viewport["height"], device_scale_factor=1, mobile=False
-        ))
-
-    def _flatten_positions(self):
-        """Convert all fixed/sticky elements to static so they don't repeat on PDF pages.
-        Called after PNG capture so the screenshot is not affected."""
-        self.sb.cdp.evaluate("""
-        (() => {
-            document.querySelectorAll('*').forEach(el => {
-                const pos = window.getComputedStyle(el).position;
-                if (pos === 'fixed' || pos === 'sticky') {
-                    el.style.setProperty('position', 'static', 'important');
-                }
-            });
-        })()
-        """)
-
-    def capture_pdf(self, path: Path):
-        """Single-page PDF via CDP printToPDF."""
-        self._flatten_positions()
-        height = self._content_height()
-        _run(self.sb, mycdp.emulation.set_emulated_media(media="screen"))
-        data, _ = _run(self.sb, mycdp.page.print_to_pdf(
-            print_background=True,
-            paper_width=max(1.0, self.viewport["width"] / 96.0),
-            paper_height=max(1.0, (height + 150) / 96.0),
-            margin_top=0.0,
-            margin_bottom=0.0,
-            margin_left=0.0,
-            margin_right=0.0,
-            prefer_css_page_size=True,
-        ))
-        path.write_bytes(base64.b64decode(data))
+        try:
+            self._remove_configured_elements()
+            data = _run(self.sb, mycdp.page.capture_screenshot(
+                format_="png",
+                clip=mycdp.page.Viewport(x=0, y=0, width=w, height=height, scale=1),
+                capture_beyond_viewport=True,
+            ))
+            path.write_bytes(base64.b64decode(data))
+        finally:
+            _run(self.sb, mycdp.emulation.set_device_metrics_override(
+                width=w, height=self.viewport["height"], device_scale_factor=1, mobile=False
+            ))
 
     def extract_data(self) -> dict:
         title = self.sb.cdp.evaluate("document.title") or ""
@@ -241,12 +204,11 @@ class PageCapture:
             h1 = ""
         return {"page_name": title, "h1": h1}
 
-    def run(self, url: str, png_path: Path, pdf_path: Path) -> dict:
+    def run(self, url: str, png_path: Path) -> dict:
         """Full capture pipeline for one URL. Returns page data dict."""
         self.open(url)
         self.scroll()
-        self.sb.sleep(self.timing.get("stabilization_ms", 2500) / 1000)
+        self.sb.sleep(self.timing.get("stabilization_ms", 800) / 1000)
         self.hide_overlays()
         self.capture_png(png_path)
-        self.capture_pdf(pdf_path)
         return self.extract_data()

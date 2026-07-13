@@ -95,20 +95,25 @@ def extract_from_page(sb, rules: list[dict]) -> dict:
 
 def save_ruleset(rules: list[dict], name: str) -> Path:
     RULESETS_DIR.mkdir(parents=True, exist_ok=True)
-    path = RULESETS_DIR / f"{name}.json"
+    safe = re.sub(r"[^\w\- ]", "", name).strip()
+    if not safe:
+        raise ValueError("Invalid rule set name")
+    path = RULESETS_DIR / f"{safe}.json"
     path.write_text(json.dumps(rules, indent=2), encoding="utf-8")
     return path
 
 
 def load_ruleset(name: str) -> list[dict]:
-    path = RULESETS_DIR / f"{name}.json"
+    safe = re.sub(r"[^\w\- ]", "", name).strip()
+    path = RULESETS_DIR / f"{safe}.json"
     if not path.exists():
         return []
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def delete_ruleset(name: str) -> bool:
-    path = RULESETS_DIR / f"{name}.json"
+    safe = re.sub(r"[^\w\- ]", "", name).strip()
+    path = RULESETS_DIR / f"{safe}.json"
     if path.exists():
         path.unlink()
         return True

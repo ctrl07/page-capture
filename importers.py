@@ -53,7 +53,10 @@ def import_from_sitemap_xml(raw: str) -> list[str]:
 
 
 def _parse_sitemap_xml(raw: str) -> list[str]:
-    root = ET.fromstring(raw)
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as e:
+        raise ValueError(f"Invalid XML: {e}") from e
     ns_match = re.match(r"\{(.+?)\}", root.tag)
     ns = ns_match.group(1) if ns_match else ""
 

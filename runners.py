@@ -59,8 +59,9 @@ def write_results_csv(results: list[dict], csv_path: Path) -> None:
     if not results:
         return
     csv_path.parent.mkdir(parents=True, exist_ok=True)
+    all_keys = list(dict.fromkeys(k for row in results for k in row))
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=results[0].keys())
+        w = csv.DictWriter(f, fieldnames=all_keys, extrasaction="ignore")
         w.writeheader()
         w.writerows(results)
 
@@ -122,7 +123,7 @@ def build_zip(results: list[dict], output_dir: Path) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for r in results:
-            for key in ("file", "png", "pdf"):
+            for key in ("file", "pdf"):
                 p = Path(r.get(key, ""))
                 if p.exists() and p.is_file():
                     zf.write(p, arcname=p.name)
@@ -325,10 +326,9 @@ class UnifiedRunner:
 
     _thread: Optional[threading.Thread]
 
-    def __init__(self, urls: list[str], collectors: list[dict], rules: list[dict], runtime_cfg: dict, output_dir: Path):
+    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path):
         self.urls = urls
         self.collectors = collectors
-        self.rules = rules
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.results = {"screenshot": [], "seo": [], "extraction": []}
