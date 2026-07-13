@@ -40,6 +40,7 @@ from runners import (
     HERE,
     CaptureRunner,
     ExtractionRunner,
+    FastRunner,
     UnifiedRunner,
     build_runtime_config,
     build_zip,
@@ -284,9 +285,13 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
 
 # ── Page functions ──
 
-def _render_unified_results(runner: UnifiedRunner, key_prefix: str = "") -> None:
+def _render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str = "") -> None:
     output_dir = runner.output_dir
-    collectors = [c["name"] for c in runner.collectors]
+    collectors_attr = getattr(runner, "collectors", None)
+    if collectors_attr:
+        collectors = [c["name"] for c in collectors_attr]
+    else:
+        collectors = list(runner.results.keys())
     labels = {
         "screenshot": "Screenshots", "seo": "Quick SEO",
         "extraction": "Custom Rules",
@@ -1133,6 +1138,16 @@ def page_new_run() -> None:
             output_name = st.text_input("Folder name", value=st.session_state.newrun_output, key="newrun_output_name")
             st.session_state.newrun_output = output_name
 
+        fast_mode = st.checkbox(
+            "Fast mode (Scrapy)",
+            value=st.session_state.get("newrun_fast_mode", False),
+            key="newrun_fast_mode",
+            help="Crawl SEO data via Scrapy (8 concurrent) after solving Turnstile once. Faster but no screenshots.",
+        )
+        if fast_mode:
+            st.info("Screenshots disabled in fast mode — use SEO / Custom Rules collectors only.")
+            collectors["screenshot"] = False
+
     st.markdown("---")
 
     # Run button — prominent
@@ -1161,16 +1176,26 @@ def page_new_run() -> None:
             stabilization_ms=int(ss_delay * 1000),
         )
 
-        collector_list: list[dict] = []
-        if collectors["screenshot"]:
-            collector_list.append({"name": "screenshot", "rules": None})
-        if collectors["seo"]:
-            collector_list.append({"name": "seo", "rules": None})
-        if collectors["extraction"]:
-            collector_list.append({"name": "extraction", "rules": st.session_state.get("extraction_rules", [])})
+        fast_mode = st.session_state.get("newrun_fast_mode", False)
 
-        runner = UnifiedRunner(existing_urls, collector_list, runtime_cfg, output_dir,
-                               seo_fields=st.session_state.get("newrun_seo_fields_enabled"))
+        if fast_mode:
+            # Fast mode: FastRunner for SEO (no screenshots)
+            runner = FastRunner(
+                existing_urls, runtime_cfg, output_dir,
+                seo_fields=st.session_state.get("newrun_seo_fields_enabled"),
+            )
+        else:
+            # Standard mode: UnifiedRunner with browser
+            collector_list: list[dict] = []
+            if collectors["screenshot"]:
+                collector_list.append({"name": "screenshot", "rules": None})
+            if collectors["seo"]:
+                collector_list.append({"name": "seo", "rules": None})
+            if collectors["extraction"]:
+                collector_list.append({"name": "extraction", "rules": st.session_state.get("extraction_rules", [])})
+
+            runner = UnifiedRunner(existing_urls, collector_list, runtime_cfg, output_dir,
+                                   seo_fields=st.session_state.get("newrun_seo_fields_enabled"))
         st.session_state.unified_runner = runner
         st.session_state.unified_running = True
         st.rerun()
@@ -1190,18 +1215,28 @@ def _render_run_complete(runner) -> None:
     """Show completed run results with prominent download buttons."""
     st.session_state.newrun_just_finished = False
 
+    # Support both UnifiedRunner (results dict) and ScrapyRunner (results["seo"])
+    results_by_collector: dict[str, list[dict]] = {}
+    if hasattr(runner, "results"):
+        if isinstance(runner.results, dict):
+            results_by_collector = runner.results
+        else:
+            results_by_collector = {"seo": runner.results}
+
     ok = sum(
-        1 for rows in runner.results.values() for r in rows if r.get("status") == "ok"
+        1 for rows in results_by_collector.values() for r in rows if r.get("status") == "ok"
     )
-    total = sum(len(rows) for rows in runner.results.values())
+    total = sum(len(rows) for rows in results_by_collector.values())
     failed = total - ok
+
+    collectors = getattr(runner, "collectors", [{"name": "seo"}])
 
     # Big metrics row
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("URLs", len(runner.urls))
     m2.metric("Passed", ok)
     m3.metric("Failed", failed)
-    m4.metric("Collectors", len(runner.collectors))
+    m4.metric("Collectors", len(collectors))
 
     st.markdown("---")
 
@@ -1210,9 +1245,9 @@ def _render_run_complete(runner) -> None:
     dl_cols = st.columns(4)
     dl_idx = 0
 
-    if runner.results.get("screenshot"):
+    if results_by_collector.get("screenshot"):
         with dl_cols[dl_idx]:
-            zip_data = build_zip(runner.results["screenshot"], runner.output_dir)
+            zip_data = build_zip(results_by_collector["screenshot"], runner.output_dir)
             st.download_button(
                 "Screenshots ZIP",
                 data=zip_data,
@@ -1224,13 +1259,13 @@ def _render_run_complete(runner) -> None:
             )
         dl_idx += 1
 
-    if runner.results.get("seo"):
+    if results_by_collector.get("seo"):
         with dl_cols[dl_idx]:
-            all_keys = list(dict.fromkeys(k for r in runner.results["seo"] for k in r))
+            all_keys = list(dict.fromkeys(k for r in results_by_collector["seo"] for k in r))
             csv_buf = io.StringIO()
             writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
             writer.writeheader()
-            writer.writerows(runner.results["seo"])
+            writer.writerows(results_by_collector["seo"])
             st.download_button(
                 "SEO CSV",
                 data=csv_buf.getvalue().encode(),
@@ -1242,13 +1277,13 @@ def _render_run_complete(runner) -> None:
             )
         dl_idx += 1
 
-    if runner.results.get("extraction"):
+    if results_by_collector.get("extraction"):
         with dl_cols[dl_idx]:
-            all_keys = list(dict.fromkeys(k for r in runner.results["extraction"] for k in r))
+            all_keys = list(dict.fromkeys(k for r in results_by_collector["extraction"] for k in r))
             csv_buf = io.StringIO()
             writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
             writer.writeheader()
-            writer.writerows(runner.results["extraction"])
+            writer.writerows(results_by_collector["extraction"])
             st.download_button(
                 "Extraction CSV",
                 data=csv_buf.getvalue().encode(),
@@ -1261,7 +1296,7 @@ def _render_run_complete(runner) -> None:
         dl_idx += 1
 
     # SEO Analysis CTA
-    if runner.results.get("seo"):
+    if results_by_collector.get("seo"):
         st.markdown("---")
         st.markdown("**SEO Analysis**")
         st.caption("Run a full SEO health check on these results.")

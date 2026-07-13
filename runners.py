@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -523,3 +524,258 @@ class UnifiedRunner:
             "results_by_collector": self.results,
         })
         self.status = "done"
+
+
+# ── Fast crawl (curl_cffi + threads) ────────────────────────────────────────────
+
+
+def _fetch_and_extract(
+    url: str,
+    cookies: dict[str, str],
+    user_agent: str,
+    timeout: float = 30.0,
+) -> dict:
+    """Fetch one URL with curl_cffi (Chrome TLS impersonation) and extract SEO data."""
+    from curl_cffi import requests as _curl
+    from lxml import html as _html
+
+    headers = {"User-Agent": user_agent} if user_agent else {}
+    try:
+        resp = _curl.get(url, cookies=cookies, headers=headers, timeout=timeout, impersonate="chrome")
+    except Exception as exc:
+        return {"url": url, "status": f"error: {exc}"}
+
+    status_code = resp.status_code
+    host = url.split("//")[-1].split("/")[0].split(":")[0]
+    # Non-2xx responses are almost always bot-block pages (403/503/etc.)
+    if status_code != 200:
+        return {
+            "url": url,
+            "status": f"http_{status_code}",
+            "status_code": status_code,
+        }
+    data: dict = {"url": url, "status": "ok", "status_code": status_code}
+
+    try:
+        tree = _html.fromstring(resp.text)
+    except Exception:
+        tree = None
+
+    if tree is None:
+        return data
+
+    def _text(expr: str) -> str:
+        return " ".join(t.strip() for t in tree.xpath(expr) if isinstance(t, str) and t.strip())
+
+    def _attr(expr: str) -> str:
+        vals = tree.xpath(expr)
+        return vals[0].strip() if vals else ""
+
+    title = _text("//title/text()")
+    data["title"] = title
+    data["title_len"] = len(title)
+
+    meta_desc = _attr("//meta[@name='description']/@content")
+    data["meta_description"] = meta_desc
+    data["meta_desc_len"] = len(meta_desc)
+
+    data["canonical"] = _attr("//link[@rel='canonical']/@href")
+    data["robots_meta"] = _attr("//meta[@name='robots']/@content")
+
+    data["h1"] = _text("//h1//text()")
+    data["h2s"] = " | ".join(t for t in _text("//h2//text()").split(" | ")[:15])[:500]
+    data["h3s"] = " | ".join(t for t in _text("//h3//text()").split(" | ")[:15])[:500]
+
+    data["og_title"] = _attr("//meta[@property='og:title']/@content")
+    data["og_description"] = _attr("//meta[@property='og:description']/@content")
+    data["og_image"] = _attr("//meta[@property='og:image']/@content")
+
+    schema_types = []
+    for script_text in tree.xpath('//script[@type="application/ld+json"]/text()'):
+        try:
+            d = json.loads(script_text)
+            t = d.get("@type", "")
+            if isinstance(t, list):
+                schema_types.extend(t)
+            elif t:
+                schema_types.append(t)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    data["schema_types"] = " | ".join(schema_types)
+
+    body_text = " ".join(tree.xpath("//body//text()"))
+    data["word_count"] = len(body_text.split())
+
+    internal = 0
+    external = 0
+    for href in tree.xpath("//a/@href"):
+        href = href.strip()
+        if href.startswith("#") or href.startswith("mailto:") or href.startswith("tel:"):
+            continue
+        if href.startswith("//"):
+            link_host = href[2:].split("/")[0].split(":")[0]
+        elif href.startswith("http"):
+            link_host = href.split("//")[-1].split("/")[0].split(":")[0]
+        else:
+            link_host = host
+        if link_host == host:
+            internal += 1
+        else:
+            external += 1
+    data["internal_links"] = internal
+    data["external_links"] = external
+
+    imgs = tree.xpath("//img")
+    missing = sum(1 for img in imgs if not (img.attrib.get("alt", "") or "").strip())
+    data["images_missing_alt"] = missing
+
+    # Soft-block detection: sites sometimes return 200 with a challenge/block page.
+    # (Hard blocks via non-200 are already caught above by status_code != 200.)
+    _BLOCK_MARKERS = (
+        "just a moment", "attention required", "checking your browser",
+        "dealer website", "access denied", "are you a robot", "enable javascript",
+    )
+    if data.get("status") == "ok":
+        title_low = (data.get("title") or "").lower()
+        if any(m in title_low for m in _BLOCK_MARKERS):
+            data["status"] = "blocked"
+
+    return data
+
+
+class FastRunner:
+    """Fast crawl using curl_cffi + ThreadPoolExecutor with cookies from SeleniumBase.
+
+    Flow:
+    1. Open first URL in SeleniumBase, solve Turnstile.
+    2. Export cookies + user-agent.
+    3. Close browser.
+    4. Crawl all URLs concurrently with curl_cffi (8 threads).
+    5. Collect results into ``self.results["seo"]``.
+    """
+
+    _thread: Optional[threading.Thread]
+
+    def __init__(
+        self,
+        urls: list[str],
+        runtime_cfg: dict,
+        output_dir: Path,
+        seo_fields: list[dict] | None = None,
+    ):
+        self.urls = urls
+        self.runtime_cfg = runtime_cfg
+        self.output_dir = output_dir
+        self.seo_fields = seo_fields
+        self.results: dict[str, list[dict]] = {"seo": []}
+        self.cancelled = False
+        self._thread = None
+        self.status = "queued"
+        self.progress_total = len(urls)
+        self.progress_done = 0
+
+    def _refresh_session(self, seed_url: str) -> dict:
+        """Open a browser, solve Turnstile, and return a fresh session dict.
+
+        Used to obtain a new clearance cookie when a crawl batch gets blocked.
+        """
+        viewport = self.runtime_cfg["viewport"]
+        try:
+            with SB(
+                uc=True, test=True, headless=False,
+                window_size=f"{viewport['width']},{viewport['height']}",
+            ) as sb:
+                page = PageCapture(sb, self.runtime_cfg)
+                self.status = f"Solving Turnstile on {seed_url}"
+                page.open(seed_url)
+                page.scroll()
+                sb.sleep(self.runtime_cfg["timing"]["stabilization_ms"] / 1000)
+                page.hide_overlays()
+                return page.extract_session()
+        except Exception:
+            return {}
+
+    def _crawl_batch(self, urls: list[str], cookies_dict: dict, user_agent: str) -> list[dict]:
+        if not urls:
+            return []
+        items: list[dict] = []
+        max_workers = min(8, len(urls))
+
+        def _crawl_one(url: str) -> dict:
+            try:
+                return _fetch_and_extract(url, cookies_dict, user_agent)
+            except Exception as exc:
+                return {"url": url, "status": f"error: {exc}"}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_crawl_one, url): url for url in urls}
+            for future in as_completed(futures):
+                if self.cancelled:
+                    break
+                items.append(future.result())
+        return items
+
+    def run(self):
+        self.results = {"seo": []}
+        self.progress_done = 0
+        self.status = "Starting browser..."
+
+        output_dir = self.output_dir
+        data_dir = output_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Step 1: open browser, solve Turnstile on first URL, export session
+        session = self._refresh_session(self.urls[0])
+        cookies_dict = {c["name"]: c["value"] for c in session.get("cookies", [])}
+        user_agent = session.get("user_agent", "")
+
+        # Step 2: crawl all URLs concurrently with curl_cffi
+        self.status = f"Crawling {len(self.urls)} URLs..."
+        items = self._crawl_batch(self.urls, cookies_dict, user_agent)
+        self.progress_done = min(len(items), self.progress_total)
+
+        # Step 3: retry anything that was blocked with a fresh Turnstile session
+        max_retries = 3
+        for attempt in range(max_retries):
+            blocked = [
+                it for it in items
+                if not (it.get("status") == "ok" and it.get("status_code") == 200)
+            ]
+            if not blocked or self.cancelled:
+                break
+            self.status = f"Retrying {len(blocked)} blocked URLs (attempt {attempt + 1}/{max_retries})..."
+            fresh = self._refresh_session(blocked[0]["url"])
+            if not fresh.get("cookies"):
+                break
+            cookies_dict = {c["name"]: c["value"] for c in fresh.get("cookies", [])}
+            user_agent = fresh.get("user_agent", "")
+            retried = self._crawl_batch([it["url"] for it in blocked], cookies_dict, user_agent)
+            by_url = {r["url"]: r for r in retried}
+            for it in items:
+                u = it.get("url")
+                if u in by_url:
+                    it.clear()
+                    it.update(by_url[u])
+            self.progress_done = min(len(items), self.progress_total)
+
+        self.results["seo"] = items
+        self.progress_done = self.progress_total
+        self.status = "done"
+
+        if items:
+            _compute_internal_inlinks(items)
+
+        csv_path = data_dir / "seo_results.csv"
+        write_results_csv(items, csv_path)
+
+        total = len(items)
+        ok_count = sum(1 for r in items if r.get("status") == "ok")
+        save_history({
+            "timestamp": datetime.now().isoformat(),
+            "kind": "fast_seo",
+            "total": total,
+            "ok": ok_count,
+            "fail": total - ok_count,
+            "output_dir": str(output_dir),
+            "results": items,
+        })

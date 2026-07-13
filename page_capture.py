@@ -205,6 +205,39 @@ class PageCapture:
             h1 = ""
         return {"page_name": title, "h1": h1}
 
+    def extract_session(self) -> dict:
+        """Extract cookies + user agent from the browser after Turnstile solve.
+
+        Returns a dict with ``cookies`` (list of Scrapy-compatible dicts) and
+        ``user_agent`` (str) for hand-off to Scrapy.
+        """
+        try:
+            raw_cookies = self.sb.get_cookies() or []
+        except Exception:
+            raw_cookies = []
+
+        cookies = []
+        for c in raw_cookies:
+            domain = c.get("domain", "")
+            cookies.append({
+                "name": c.get("name", ""),
+                "value": c.get("value", ""),
+                "domain": domain,
+                "path": c.get("path", "/"),
+                "secure": c.get("secure", False),
+                "httpOnly": c.get("httpOnly", False),
+                "sameSite": c.get("sameSite", "Lax"),
+            })
+
+        try:
+            user_agent = self.sb.cdp.get_user_agent() or ""
+        except Exception:
+            user_agent = ""
+        if not user_agent:
+            user_agent = self.sb.evaluate("navigator.userAgent") or ""
+
+        return {"cookies": cookies, "user_agent": user_agent}
+
     def run(self, url: str, png_path: Path) -> dict:
         """Full capture pipeline for one URL. Returns page data dict."""
         self.open(url)
