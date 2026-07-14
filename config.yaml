@@ -154,7 +154,10 @@ timing:
   inter_page_delay_max: 0.5
   inter_page_delay_min: 0.3
   reconnect_ms: 3000
+  scroll_idle_poll_ms: 100
+  scroll_idle_timeout_ms: 5000
   scroll_interval_ms: 600
+  scroll_wait_for_idle: true
   stabilization_ms: 1500
 viewport:
   height: 1080

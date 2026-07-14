@@ -24,10 +24,13 @@ def load_config(path: Path) -> dict:
     defaults = {
         "viewport": {"width": 1920, "height": 1080},
         "timing": {
-            "scroll_interval_ms":   600,
-            "stabilization_ms":    800,
-            "inter_page_delay_min": 0.3,
-            "inter_page_delay_max": 0.5,
+            "scroll_interval_ms":      600,
+            "stabilization_ms":       800,
+            "inter_page_delay_min":   0.3,
+            "inter_page_delay_max":   0.5,
+            "scroll_wait_for_idle":   True,
+            "scroll_idle_timeout_ms": 5000,
+            "scroll_idle_poll_ms":    100,
         },
         "hide": {},
     }
@@ -103,6 +106,44 @@ class PageCapture:
             self.sb.solve_captcha()
             self.sb.sleep(3)
 
+    _IDLE_TRACKER_JS = """\
+(function(){
+  if(window.__idleTracker) return;
+  window.__pendingFetch=0; window.__pendingXHR=0;
+  var origFetch=window.fetch;
+  window.fetch=function(){window.__pendingFetch++;return origFetch.apply(this,arguments).finally(function(){window.__pendingFetch--})};
+  var origOpen=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(){window.__pendingXHR++;var self=this;self.addEventListener('loadend',function(){window.__pendingXHR--});return origOpen.apply(this,arguments)};
+  window.__idleTracker=true;
+})()"""
+
+    _IDLE_CHECK_JS = """\
+(function(){
+  var imgs=document.querySelectorAll('img');
+  for(var i=0;i<imgs.length;i++){if(!imgs[i].complete)return false}
+  if(window.__pendingFetch>0||window.__pendingXHR>0)return false;
+  return true;
+})()"""
+
+    def _inject_idle_tracker(self):
+        """One-time injection of fetch/XHR pending-request counters."""
+        self.sb.cdp.evaluate(self._IDLE_TRACKER_JS)
+
+    def _is_idle(self) -> bool:
+        """True when all images loaded and no pending fetch/XHR."""
+        return bool(self.sb.cdp.evaluate(self._IDLE_CHECK_JS))
+
+    def _wait_for_idle(self):
+        """Poll until network idle or timeout."""
+        timeout = self.timing.get("scroll_idle_timeout_ms", 5000) / 1000
+        poll   = self.timing.get("scroll_idle_poll_ms", 100) / 1000
+        elapsed = 0.0
+        while elapsed < timeout:
+            if self._is_idle():
+                return
+            self.sb.sleep(poll)
+            elapsed += poll
+
     def scroll(self):
         total = self.sb.cdp.evaluate(
             "(document.documentElement || document.body || {scrollHeight:0}).scrollHeight"
@@ -110,12 +151,21 @@ class PageCapture:
         step = self.sb.cdp.evaluate("Math.round(window.innerHeight * 0.8)") or 1
         steps = max(1, int(total / step) + 1)
         delay = self.timing.get("scroll_interval_ms", 600) / 1000
+        use_idle = self.timing.get("scroll_wait_for_idle", True)
+        if use_idle:
+            self._inject_idle_tracker()
         for _ in range(steps):
             self.sb.cdp.scroll_down(amount=step)
-            self.sb.sleep(delay)
+            if use_idle:
+                self._wait_for_idle()
+            else:
+                self.sb.sleep(delay)
         for _ in range(steps):
             self.sb.cdp.scroll_up(amount=step)
-            self.sb.sleep(delay)
+            if use_idle:
+                self._wait_for_idle()
+            else:
+                self.sb.sleep(delay)
 
     def hide_overlays(self):
         escaped = self.css.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
