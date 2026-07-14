@@ -9,7 +9,6 @@ import streamlit as st
 
 from pages.capture import page_new_run
 from pages.dashboard import page_dashboard
-from pages.history import page_history
 from pages.rule_sets import page_rule_sets
 from pages.seo_analysis import page_seo_analysis
 from pages.settings import page_settings
@@ -43,7 +42,6 @@ def main() -> None:
             st.Page(page_seo_analysis, title="SEO Analysis", icon=":material/analytics:"),
         ],
         "Library": [
-            st.Page(page_history, title="History", icon=":material/history:"),
             st.Page(page_settings, title="Settings", icon=":material/settings:"),
         ],
     }

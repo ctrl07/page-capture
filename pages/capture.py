@@ -160,6 +160,23 @@ def page_new_run() -> None:
         if key not in st.session_state:
             st.session_state[key] = default
 
+    # ── Restore from dashboard re-run ──
+    if st.session_state.get("_newrun_from_dashboard"):
+        st.session_state.pop("newrun_just_finished", None)
+        st.session_state.pop("_newrun_from_dashboard", None)
+        restore = st.session_state.pop("restore_collectors", None)
+        if restore and isinstance(restore, list):
+            collectors_dict = st.session_state.newrun_collectors
+            for name in collectors_dict:
+                collectors_dict[name] = name in restore
+            st.session_state.newrun_collectors = collectors_dict
+        restore_rules = st.session_state.pop("restore_extraction_rules", None)
+        if restore_rules:
+            st.session_state.extraction_rules = restore_rules
+        restore_fast = st.session_state.pop("restore_fast_mode", None)
+        if restore_fast:
+            st.session_state.newrun_fast_mode = True
+
     # ── If a run is active or just finished, show it full-width ──
     if st.session_state.unified_running and st.session_state.unified_runner:
         _render_active_run()
@@ -312,7 +329,7 @@ def page_new_run() -> None:
     # Run button — prominent
     active_collectors = [k for k, v in collectors.items() if v]
     can_run = existing_urls and active_collectors
-    btn_disabled = st.session_state.unified_running or st.session_state.running or not can_run
+    btn_disabled = st.session_state.unified_running or not can_run
 
     reasons = []
     if not existing_urls:

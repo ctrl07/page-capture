@@ -174,9 +174,11 @@ def build_zip(results: list[dict], output_dir: Path) -> bytes:
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for r in results:
             for key in ("file", "pdf"):
-                p = Path(r.get(key, ""))
-                if p.exists() and p.is_file():
-                    zf.write(p, arcname=p.name)
+                raw = r.get(key, "")
+                if raw:
+                    p = Path(raw)
+                    if p.is_file():
+                        zf.write(p, arcname=p.name)
     return buf.getvalue()
 
 
@@ -199,8 +201,11 @@ def png_to_pdf(png_path: Path, pdf_path: Path) -> None:
 
 def load_history() -> list[dict]:
     if HISTORY_FILE.exists():
-        with HISTORY_FILE.open(encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with HISTORY_FILE.open(encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
     return []
 
 
@@ -219,6 +224,34 @@ def delete_history_entry(index: int) -> None:
         history.pop(index)
         with HISTORY_FILE.open("w", encoding="utf-8") as f:
             json.dump(history, f, indent=2)
+
+
+def get_results(entry: dict) -> dict[str, list[dict]]:
+    """Normalize history entry results into a collector-keyed dict.
+
+    UnifiedRunner saves ``results_by_collector`` (``dict[str, list[dict]]``).
+    All other runners save ``results`` (``list[dict]``) which gets wrapped
+    under a synthetic ``"_flat"`` key so callers always get the same shape.
+    """
+    if "results_by_collector" in entry:
+        return entry["results_by_collector"]
+    flat = entry.get("results", [])
+    if flat:
+        kind = entry.get("kind", "_flat")
+        return {kind: flat}
+    return {}
+
+
+def get_urls_from_results(entry: dict) -> list[str]:
+    """Extract all unique URLs from a history entry, regardless of format."""
+    urls: list[str] = []
+    by_collector = get_results(entry)
+    for rows in by_collector.values():
+        for r in rows:
+            u = r.get("url") or r.get("source_url") or ""
+            if u:
+                urls.append(u)
+    return list(dict.fromkeys(urls))
 
 
 class CaptureRunner:
@@ -370,6 +403,7 @@ class ExtractionRunner:
             "fail": total - ok_count,
             "output_dir": str(output_dir),
             "results": results,
+            "extraction_rules": self.rules,
         })
 
 
@@ -520,6 +554,10 @@ class UnifiedRunner:
         ok_count = sum(
             1 for rows in self.results.values() for r in rows if r.get("status") == "ok"
         )
+        extraction_rules = []
+        for c in collectors:
+            if c["name"] == "extraction":
+                extraction_rules = c.get("rules") or []
         save_history({
             "timestamp": datetime.now().isoformat(),
             "kind": "unified",
@@ -529,6 +567,8 @@ class UnifiedRunner:
             "fail": total - ok_count,
             "output_dir": str(output_dir),
             "results_by_collector": self.results,
+            "extraction_rules": extraction_rules,
+            "fast_mode": False,
         })
         self.status = "done"
 
@@ -785,4 +825,6 @@ class FastRunner:
             "fail": total - ok_count,
             "output_dir": str(output_dir),
             "results": items,
+            "fast_mode": True,
+            "collectors": ["seo"],
         })

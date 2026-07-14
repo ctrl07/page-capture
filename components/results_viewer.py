@@ -197,7 +197,6 @@ def render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str =
         c3.metric("Failed", total - ok)
         st.caption(f"Output: `{output_dir}`")
 
-        # Download buttons in summary tab too
         dl_cols = st.columns(3)
         with dl_cols[0]:
             if runner.results.get("screenshot"):
@@ -233,3 +232,62 @@ def render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str =
                     file_name="extraction_results.csv", mime="text/csv",
                     key=f"{key_prefix}dl_ext", use_container_width=True,
                 )
+
+
+def render_results_grid(results: list[dict], kind: str, output_dir: Path, key_prefix: str = "") -> list[dict]:
+    """Grid view with thumbnails for screenshots, falls back to list for other kinds."""
+    if kind != "screenshot":
+        return render_results_list(results, kind, output_dir, key_prefix)
+
+    indexed = [
+        (r, i) for i, r in enumerate(results)
+        if r.get("file") and Path(r.get("file", "")).is_file()
+    ]
+    if not indexed:
+        st.info("No screenshots available.")
+        return []
+
+    selected: list[dict] = []
+    cols_per_row = 4
+    for row_start in range(0, len(indexed), cols_per_row):
+        row_items = indexed[row_start:row_start + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for col, (row, orig_idx) in zip(cols, row_items):
+            with col:
+                file_path = Path(row["file"])
+                st.image(str(file_path), use_container_width=True)
+                st.caption(file_path.stem)
+                status = row.get("status", "")
+                badge = "OK" if status == "ok" else "Failed"
+                st.text(badge)
+                if st.checkbox("Select", key=f"{key_prefix}grid_cb_{orig_idx}"):
+                    selected.append(row)
+
+    return selected
+
+
+def render_results_list(results: list[dict], kind: str, output_dir: Path, key_prefix: str = "") -> list[dict]:
+    """List view with multi-row selection via dataframe."""
+    df = pd.DataFrame(results)
+    hide_cols = {"png", "pdf", "file"}
+    dcols = [c for c in df.columns if c not in hide_cols]
+    display_df = df[dcols] if dcols else df
+
+    col_cfg: dict = {}
+    if "url" in display_df.columns:
+        col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True)
+    if "status" in display_df.columns:
+        col_cfg["status"] = st.column_config.TextColumn("Status")
+
+    event = st.dataframe(
+        display_df, width="stretch", hide_index=True,
+        column_config=col_cfg or None,
+        on_select="rerun", selection_mode="multi-rows",
+        key=f"{key_prefix}list_df",
+    )
+
+    sel_rows = getattr(event, "selection", None)
+    sel_rows = getattr(sel_rows, "rows", []) if sel_rows else []
+    if sel_rows:
+        return [results[i] for i in sel_rows if i < len(results)]
+    return []

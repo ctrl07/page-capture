@@ -84,11 +84,8 @@ def get_manifest() -> dict | None:
 def init_session_state() -> None:
     """Initialize all session state keys at startup."""
     defaults = {
-        "runner": None,
-        "running": False,
         "capture_urls": None,
         "extraction_rules": [],
-        "extraction_runner": None,
         "unified_runner": None,
         "unified_running": False,
     }
