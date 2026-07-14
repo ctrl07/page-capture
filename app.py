@@ -20,7 +20,20 @@ def main() -> None:
     st.set_page_config(page_title="Page Capture", layout="wide", page_icon=":material/center_focus_strong:")
     init_session_state()
 
-    pages = {
+    with st.sidebar:
+        st.title("Page Capture")
+        st.caption("Screenshots, SEO & Stuff.")
+
+        # Show active run status
+        if st.session_state.get("unified_running") and st.session_state.get("unified_runner"):
+            runner = st.session_state.unified_runner
+            st.markdown("---")
+            done = runner.progress_done
+            total = runner.progress_total
+            st.markdown(f"**Running** — {done}/{total}")
+            st.caption(runner.status if runner.status else "Processing...")
+
+        pages = {
         "Capture": [
             st.Page(page_new_run, title="Capture", icon=":material/rocket_launch:", default=True),
             st.Page(page_dashboard, title="Dashboard", icon=":material/dashboard:"),
@@ -34,19 +47,6 @@ def main() -> None:
             st.Page(page_settings, title="Settings", icon=":material/settings:"),
         ],
     }
-
-    with st.sidebar:
-        st.title("Page Capture")
-        st.caption("Screenshots, SEO extraction, custom rules.")
-
-        # Show active run status
-        if st.session_state.get("unified_running") and st.session_state.get("unified_runner"):
-            runner = st.session_state.unified_runner
-            st.markdown("---")
-            done = runner.progress_done
-            total = runner.progress_total
-            st.markdown(f"**Running** — {done}/{total}")
-            st.caption(runner.status if runner.status else "Processing...")
 
     pg = st.navigation(pages, position="sidebar")
     pg.run()

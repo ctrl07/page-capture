@@ -158,7 +158,7 @@ timing:
   scroll_idle_timeout_ms: 5000
   scroll_interval_ms: 600
   scroll_wait_for_idle: true
-  stabilization_ms: 1500
+  stabilization_ms: 1000
 viewport:
   height: 1080
   width: 1920
