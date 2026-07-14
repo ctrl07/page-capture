@@ -96,10 +96,10 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
 
                 if kind == "screenshot":
                     png_path = Path(row.get("file", ""))
-                    if png_path.exists():
+                    if png_path.is_file():
                         st.image(str(png_path), width="stretch")
                     pdf_path = Path(row.get("pdf", ""))
-                    if pdf_path.exists():
+                    if pdf_path.is_file():
                         with open(pdf_path, "rb") as f:
                             st.download_button(
                                 "Download PDF", data=f,
@@ -133,7 +133,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
             indexed = [
                 (r.get("file", ""), i)
                 for i, r in enumerate(results)
-                if r.get("file") and Path(r.get("file", "")).exists()
+                if r.get("file") and Path(r.get("file", "")).is_file()
             ]
             if not indexed:
                 st.info("No screenshots available.")
@@ -154,7 +154,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                             )
                     sel_idx = next(i for f, i in indexed if f == selected)
                     pdf_file = results[sel_idx].get("pdf", "")
-                    if pdf_file and Path(pdf_file).exists():
+                    if pdf_file and Path(pdf_file).is_file():
                         with col_pdf:
                             with open(pdf_file, "rb") as f:
                                 st.download_button(
