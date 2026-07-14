@@ -382,12 +382,13 @@ class UnifiedRunner:
 
     _thread: Optional[threading.Thread]
 
-    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path, seo_fields: list[dict] | None = None):
+    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path, seo_fields: list[dict] | None = None, generate_pdf: bool = False):
         self.urls = urls
         self.collectors = collectors
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.seo_fields = seo_fields
+        self.generate_pdf = generate_pdf
         self.results = {"screenshot": [], "seo": [], "extraction": []}
         self.cancelled = False
         self._thread = None
@@ -459,6 +460,12 @@ class UnifiedRunner:
                                 "h1": page_data.get("h1", ""),
                                 "file": str(png_path),
                             }
+                            if self.generate_pdf:
+                                pdf_dir = output_dir / "pdf"
+                                pdf_dir.mkdir(parents=True, exist_ok=True)
+                                pdf_path = pdf_dir / f"{slug}.pdf"
+                                png_to_pdf(png_path, pdf_path)
+                                ss_row["pdf"] = str(pdf_path)
                         except Exception as exc:
                             ss_row = {"url": url, "status": f"error: {exc}"}
                     else:

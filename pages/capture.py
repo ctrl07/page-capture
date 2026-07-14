@@ -297,6 +297,16 @@ def page_new_run() -> None:
             st.info("Screenshots disabled in fast mode — use SEO / Custom Rules collectors only.")
             collectors["screenshot"] = False
 
+        generate_pdf = st.checkbox(
+            "Generate PDFs",
+            value=st.session_state.get("newrun_generate_pdf", False),
+            key="newrun_generate_pdf",
+            help="Convert each screenshot PNG to a lossless PDF alongside it.",
+        )
+        if generate_pdf and not collectors.get("screenshot"):
+            st.warning("PDFs require screenshots — enable the Screenshots collector.")
+            generate_pdf = False
+
     st.markdown("---")
 
     # Run button — prominent
@@ -344,7 +354,8 @@ def page_new_run() -> None:
                 collector_list.append({"name": "extraction", "rules": st.session_state.get("extraction_rules", [])})
 
             runner = UnifiedRunner(existing_urls, collector_list, runtime_cfg, output_dir,
-                                   seo_fields=st.session_state.get("newrun_seo_fields_enabled"))
+                                   seo_fields=st.session_state.get("newrun_seo_fields_enabled"),
+                                   generate_pdf=st.session_state.get("newrun_generate_pdf", False))
         st.session_state.unified_runner = runner
         st.session_state.unified_running = True
         register_runner(runner)
