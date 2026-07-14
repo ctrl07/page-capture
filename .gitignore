@@ -10,3 +10,7 @@ downloaded_files/
 photos/
 output/
 .run_history.json
+.active_run.json
+sparta-chevy/
+test_scrapy_output/
+run_*/

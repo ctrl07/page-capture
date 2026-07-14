@@ -1,5 +1,5 @@
 ---
-description: Expert in SeleniumBase CDP browser automation for the Page Capture app. Use when working with browser interaction, CDP evaluation, page capture, overlay hiding, Google Maps scraping, or any sb.cdp.evaluate() patterns. Do NOT use for Streamlit UI work.
+description: Expert in SeleniumBase CDP browser automation for the Page Capture app. Use when working with browser interaction, CDP evaluation, page capture, overlay hiding, bot bypass, or any sb.cdp.evaluate() patterns. Do NOT use for Streamlit UI work.
 mode: subagent
 ---
 

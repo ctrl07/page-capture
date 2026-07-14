@@ -1,3 +1,11 @@
+"""Runner classes for capture, extraction, and unified crawl.
+
+JS strings: build_seo_js() and build_extraction_js() return JavaScript as
+Python f-strings/raw-strings. These are injected via sb.cdp.evaluate() and
+run in the browser context. No template engine — just string concatenation
+with field lists joined by semicolons.
+"""
+
 from __future__ import annotations
 
 import csv
@@ -38,8 +46,10 @@ def slugify(url: str) -> str:
 def parse_seo_payload(raw: str, seo_fields: list[dict] | None = None) -> dict:
     """Parse raw JSON from SEO JS into a flat dict.
 
-    When seo_fields is None, falls back to legacy hardcoded field mapping
-    for backwards compatibility with existing _seo_js() callers.
+    When seo_fields is provided, uses the configurable field parser (parse_seo_fields).
+    When seo_fields is None, falls back to a legacy hardcoded mapping that matches
+    the original _seo_js() output format exactly. This fallback exists for backwards
+    compatibility with callers that don't pass seo_fields (e.g. tests, run_capture.py).
     """
     if seo_fields is not None:
         return parse_seo_fields(raw, seo_fields)
@@ -89,84 +99,15 @@ def build_runtime_config(CONFIG: dict, viewport: dict, stabilization_ms: int) ->
 
 
 def _compute_internal_inlinks(results: list[dict]) -> None:
-    """Compute internal_inlinks for each row based on outlink counts from all pages.
+    """Placeholder for internal inlink computation.
 
-    Since we only have outlink *counts* (not individual URLs), we estimate
-    inlinks as the total outlinks from pages whose internal_links > 0,
-    distributed proportionally. This is approximate — a full link graph
-    would require collecting individual outlink URLs.
+    Currently a no-op — sets internal_inlinks to 0 for all rows.
+    A future enhancement could collect individual outlink URLs during crawl
+    to build a proper link graph.
     """
-    # For now, set internal_inlinks = 0 for all pages
-    # A future enhancement can collect individual outlink URLs during crawl
     for row in results:
         if row.get("status") == "ok":
             row["internal_inlinks"] = row.get("internal_inlinks", 0)
-
-
-def _seo_js() -> str:
-    return r"""
-(() => {
-    const q = (s) => document.querySelector(s);
-    const qa = (s) => Array.from(document.querySelectorAll(s));
-    const metaContent = (attr, val) => {
-        const el = document.querySelector(`meta[${attr}="${val}"]`);
-        return el ? (el.getAttribute('content') || '') : '';
-    };
-    const _contentArea = (() => {
-        for (const sel of [
-            'main', 'article', '[role="main"]', '[role="article"]',
-            '.content', '.main-content', '.post-content', '.entry-content',
-            '.article-content', '.page-content', '.site-content',
-            '#content', '#main-content', '#main', '#mainContent',
-        ]) {
-            const el = document.querySelector(sel);
-            if (el && el.querySelectorAll('h2, h3').length > 0) return el;
-        }
-        return null;
-    })();
-    const _headings = (tag, max) => {
-        const scope = _contentArea || document;
-        const seen = new Set();
-        const out = [];
-        for (const el of scope.querySelectorAll(tag)) {
-            const t = el.innerText.trim().replace(/\s+/g, ' ');
-            if (t && !seen.has(t)) { seen.add(t); out.push(t); }
-            if (out.length >= max) break;
-        }
-        return out.join(' | ');
-    };
-    const title = document.title || '';
-    const metaDesc = metaContent('name', 'description');
-    const canonical = (q('link[rel="canonical"]') || {}).href || '';
-    const robotsMeta = metaContent('name', 'robots');
-    const h1 = ((_contentArea || document).querySelector('h1') || {innerText: ''}).innerText.trim();
-    const h2s = _headings('h2', 15);
-    const h3s = _headings('h3', 15);
-    const ogTitle = metaContent('property', 'og:title');
-    const ogDesc = metaContent('property', 'og:description');
-    const ogImage = metaContent('property', 'og:image');
-    const schemaTypes = qa('script[type="application/ld+json"]')
-        .map(s => { try { const d = JSON.parse(s.textContent); return d['@type'] || ''; } catch(e) { return ''; } })
-        .flat().filter(Boolean).join(' | ');
-    const bodyText = (document.body || {innerText: ''}).innerText || '';
-    const wordCount = bodyText.trim().split(/\s+/).filter(Boolean).length;
-    const host = window.location.hostname;
-    let internal = 0, external = 0;
-    qa('a[href]').forEach(a => {
-        try {
-            const u = new URL(a.href, window.location.href);
-            if (u.hostname === host) internal++;
-            else if (u.protocol.startsWith('http')) external++;
-        } catch(e) {}
-    });
-    const imagesMissingAlt = qa('img').filter(_i => !_i.getAttribute('alt')).length;
-    return JSON.stringify({
-        title, metaDesc, canonical, robotsMeta, h1, h2s, h3s,
-        ogTitle, ogDesc, ogImage, schemaTypes, wordCount,
-        internal, external, imagesMissingAlt,
-    });
-})()
-"""
 
 
 def build_zip(results: list[dict], output_dir: Path) -> bytes:

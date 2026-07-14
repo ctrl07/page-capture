@@ -168,6 +168,7 @@ class PageCapture:
                 self.sb.sleep(delay)
 
     def hide_overlays(self):
+        # Escape CSS for safe injection into a JS template literal (backticks + ${})
         escaped = self.css.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
         self.sb.cdp.execute_script(
             f"(function(){{var s=document.createElement('style');"
