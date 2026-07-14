@@ -204,7 +204,7 @@ def render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str =
                     "Screenshots ZIP",
                     data=build_zip(runner.results["screenshot"], output_dir),
                     file_name="screenshots.zip", mime="application/zip",
-                    key=f"{key_prefix}zip", use_container_width=True,
+                    key=f"{key_prefix}zip", width="stretch",
                 )
         with dl_cols[1]:
             if runner.results.get("seo"):
@@ -217,7 +217,7 @@ def render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str =
                     "SEO CSV",
                     data=csv_buf.getvalue().encode(),
                     file_name="seo_results.csv", mime="text/csv",
-                    key=f"{key_prefix}dl_seo", use_container_width=True,
+                    key=f"{key_prefix}dl_seo", width="stretch",
                 )
         with dl_cols[2]:
             if runner.results.get("extraction"):
@@ -230,7 +230,7 @@ def render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str =
                     "Extraction CSV",
                     data=csv_buf.getvalue().encode(),
                     file_name="extraction_results.csv", mime="text/csv",
-                    key=f"{key_prefix}dl_ext", use_container_width=True,
+                    key=f"{key_prefix}dl_ext", width="stretch",
                 )
 
 
@@ -255,7 +255,7 @@ def render_results_grid(results: list[dict], kind: str, output_dir: Path, key_pr
         for col, (row, orig_idx) in zip(cols, row_items):
             with col:
                 file_path = Path(row["file"])
-                st.image(str(file_path), use_container_width=True)
+                st.image(str(file_path), width="stretch")
                 st.caption(file_path.stem)
                 status = row.get("status", "")
                 badge = "OK" if status == "ok" else "Failed"
@@ -282,7 +282,7 @@ def render_results_list(results: list[dict], kind: str, output_dir: Path, key_pr
     event = st.dataframe(
         display_df, width="stretch", hide_index=True,
         column_config=col_cfg or None,
-        on_select="rerun", selection_mode="multi-rows",
+        on_select="rerun", selection_mode="multi-row",
         key=f"{key_prefix}list_df",
     )
 

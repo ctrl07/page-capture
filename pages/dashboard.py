@@ -65,7 +65,7 @@ def _render_action_bar(
             f"Re-run selected ({len(rerun_urls)})",
             disabled=not rerun_urls,
             key=f"{key_prefix}rerun_sel",
-            use_container_width=True,
+            width="stretch",
             type="primary",
         ):
             st.session_state.capture_urls = rerun_urls
@@ -84,7 +84,7 @@ def _render_action_bar(
             f"Re-capture all ({len(all_urls)})",
             disabled=not all_urls,
             key=f"{key_prefix}recapture",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state.capture_urls = all_urls
             if entry.get("collectors"):
@@ -97,7 +97,7 @@ def _render_action_bar(
             st.rerun()
 
     with c_del:
-        if st.button("Delete", key=f"{key_prefix}del", use_container_width=True):
+        if st.button("Delete", key=f"{key_prefix}del", width="stretch"):
             st.session_state["_dash_delete_idx"] = True
 
     with c_csv:
@@ -112,7 +112,7 @@ def _render_action_bar(
             st.download_button(
                 "CSV", data=csv_buf.getvalue().encode(),
                 file_name="results.csv", mime="text/csv",
-                key=f"{key_prefix}dl_csv", use_container_width=True,
+                key=f"{key_prefix}dl_csv", width="stretch",
             )
 
     with c_zip:
@@ -121,7 +121,7 @@ def _render_action_bar(
             st.download_button(
                 "ZIP", data=build_zip(by_collector["screenshot"], output_dir),
                 file_name="screenshots.zip", mime="application/zip",
-                key=f"{key_prefix}dl_zip", use_container_width=True,
+                key=f"{key_prefix}dl_zip", width="stretch",
             )
 
 

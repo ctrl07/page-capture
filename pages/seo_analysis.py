@@ -262,5 +262,5 @@ def page_seo_analysis() -> None:
         file_name=f"seo_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
         mime="application/pdf",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     )

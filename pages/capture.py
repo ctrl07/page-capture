@@ -85,7 +85,7 @@ def _render_run_complete(runner) -> None:
                 file_name="screenshots.zip",
                 mime="application/zip",
                 key="newrun_dl_zip",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
             )
         dl_idx += 1
@@ -103,7 +103,7 @@ def _render_run_complete(runner) -> None:
                 file_name="seo_results.csv",
                 mime="text/csv",
                 key="newrun_dl_seo_csv",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
             )
         dl_idx += 1
@@ -121,7 +121,7 @@ def _render_run_complete(runner) -> None:
                 file_name="extraction_results.csv",
                 mime="text/csv",
                 key="newrun_dl_ext_csv",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
             )
         dl_idx += 1
@@ -131,7 +131,7 @@ def _render_run_complete(runner) -> None:
         st.markdown("---")
         st.markdown("**SEO Analysis**")
         st.caption("Run a full SEO health check on these results.")
-        if st.button("Open SEO Analysis", key="newrun_open_analysis", type="secondary", use_container_width=True):
+        if st.button("Open SEO Analysis", key="newrun_open_analysis", type="secondary", width="stretch"):
             st.session_state["_navigate_to_seo_analysis"] = True
             st.rerun()
 
@@ -342,7 +342,7 @@ def page_new_run() -> None:
     if reasons:
         st.caption(f"To start: {', '.join(reasons)}")
 
-    if st.button("Start Capture", disabled=btn_disabled, type="primary", key="newrun_start", use_container_width=True):
+    if st.button("Start Capture", disabled=btn_disabled, type="primary", key="newrun_start", width="stretch"):
         safe_name = re.sub(r"[^\w\-]", "_", output_name.strip())
         output_dir = HERE / safe_name
         output_dir.mkdir(parents=True, exist_ok=True)
