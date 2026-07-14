@@ -1,7 +1,8 @@
 """Quick manual test for FastRunner with real URLs."""
 from __future__ import annotations
-import sys
+
 from pathlib import Path
+
 from runners import FastRunner
 
 urls = [

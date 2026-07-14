@@ -1,14 +1,3 @@
-timing:
-  reconnect_ms: 3000
-  scroll_interval_ms: 100
-  stabilization_ms: 800
-  inter_page_delay_min: 0.3
-  inter_page_delay_max: 0.5
-
-viewport:
-  width: 1920
-  height: 1080
-
 hide:
   accessibility:
   - '#accessibeButton'
@@ -158,7 +147,15 @@ hide:
   vin_solutions:
   - '[id*=''vinsolutions'']'
   - '[class*=''vinsolutions'']'
-
 hide_visibility:
   chat:
   - '[id*=''chatFormWrapper'']'
+timing:
+  inter_page_delay_max: 0.5
+  inter_page_delay_min: 0.3
+  reconnect_ms: 3000
+  scroll_interval_ms: 600
+  stabilization_ms: 1500
+viewport:
+  height: 1080
+  width: 1920

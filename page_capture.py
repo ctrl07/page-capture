@@ -24,7 +24,7 @@ def load_config(path: Path) -> dict:
     defaults = {
         "viewport": {"width": 1920, "height": 1080},
         "timing": {
-            "scroll_interval_ms":   100,
+            "scroll_interval_ms":   600,
             "stabilization_ms":    800,
             "inter_page_delay_min": 0.3,
             "inter_page_delay_max": 0.5,
@@ -109,12 +109,13 @@ class PageCapture:
         ) or 0
         step = self.sb.cdp.evaluate("Math.round(window.innerHeight * 0.8)") or 1
         steps = max(1, int(total / step) + 1)
-        delay = self.timing.get("scroll_interval_ms", 100) / 1000
+        delay = self.timing.get("scroll_interval_ms", 600) / 1000
         for _ in range(steps):
             self.sb.cdp.scroll_down(amount=step)
             self.sb.sleep(delay)
-        self.sb.cdp.scroll_to_top()
-        self.sb.sleep(delay)
+        for _ in range(steps):
+            self.sb.cdp.scroll_up(amount=step)
+            self.sb.sleep(delay)
 
     def hide_overlays(self):
         escaped = self.css.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
