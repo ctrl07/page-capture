@@ -170,7 +170,7 @@ crawl4ai:
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   # proxy: "http://user:pass@proxy.example.com:8080"  # Optional proxy
   timeout: 60                 # Request timeout in seconds
-  wait_until: "load"          # Page load wait condition: "load", "domcontentloaded", "networkidle", "commit"
+  wait_until: "domcontentloaded"  # Page load wait condition: "load", "domcontentloaded", "networkidle", "commit"
   wait_for_timeout: 30000     # Wait condition timeout in ms
   navigation_timeout: 90000   # Navigation timeout in ms
   # Anti-bot bypass options
@@ -181,8 +181,8 @@ crawl4ai:
   session_id: "default"       # Reuse browser context across URLs (persistence)
   mean_delay: 2.0             # Base delay between requests (seconds)
   max_range: 3.0              # Random delay range: mean_delay ± max_range
-  # remove_overlay_elements: true  # Disable - causes navigation context errors
-  # remove_consent_popups: true    # Disable - causes navigation context errors
+  remove_overlay_elements: true  # Remove overlay elements (Cloudflare challenges, etc.)
+  remove_consent_popups: true    # Remove cookie consent popups
   # Browser config
   headless: true
   viewport_width: 1920

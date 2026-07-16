@@ -917,6 +917,8 @@ class Crawl4AIRunner:
             max_range=cfg.get("max_range", 2.0),
             override_navigator=cfg.get("override_navigator", True),
             user_agent_mode=cfg.get("user_agent_mode", "random"),
+            remove_overlay_elements=cfg.get("remove_overlay_elements", True),
+            remove_consent_popups=cfg.get("remove_consent_popups", True),
         )
 
         async def _run_all():
@@ -932,6 +934,8 @@ class Crawl4AIRunner:
                 magic=cfg.get("magic", True),
                 override_navigator=cfg.get("override_navigator", True),
                 user_agent_mode=cfg.get("user_agent_mode", "random"),
+                remove_overlay_elements=cfg.get("remove_overlay_elements", True),
+                remove_consent_popups=cfg.get("remove_consent_popups", True),
                 proxy_config=cfg.get("proxy"),
             ) as crawler:
 
