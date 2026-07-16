@@ -33,18 +33,18 @@ def main() -> None:
             st.caption(runner.status if runner.status else "Processing...")
 
         pages = {
-        "Capture": [
-            st.Page(page_new_run, title="Capture", icon=":material/rocket_launch:", default=True),
-            st.Page(page_dashboard, title="Dashboard", icon=":material/dashboard:"),
-        ],
-        "Tools": [
-            st.Page(page_rule_sets, title="Rule Sets", icon=":material/tune:"),
-            st.Page(page_seo_analysis, title="SEO Analysis", icon=":material/analytics:"),
-        ],
-        "Library": [
-            st.Page(page_settings, title="Settings", icon=":material/settings:"),
-        ],
-    }
+            "Capture": [
+                st.Page(page_new_run, title="Capture", icon=":material/rocket_launch:", default=True),
+                st.Page(page_dashboard, title="Dashboard", icon=":material/dashboard:"),
+            ],
+            "Tools": [
+                st.Page(page_rule_sets, title="Rule Sets", icon=":material/tune:"),
+                st.Page(page_seo_analysis, title="SEO Analysis", icon=":material/analytics:"),
+            ],
+            "Library": [
+                st.Page(page_settings, title="Settings", icon=":material/settings:"),
+            ],
+        }
 
     pg = st.navigation(pages, position="sidebar")
     pg.run()

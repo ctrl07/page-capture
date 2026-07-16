@@ -6,6 +6,7 @@ import csv
 import io
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from components.results_viewer import render_results_grid, render_results_list
@@ -26,33 +27,113 @@ def _render_metrics(history: list[dict]) -> None:
     c4.metric("Failed", sum(h.get("fail", 0) for h in history))
 
 
-def _render_run_list(history: list[dict], search: str, kind_filter: str) -> list[int]:
-    filtered: list[int] = []
+def _build_run_table(history: list[dict], search: str, kind_filter: str) -> pd.DataFrame:
+    rows = []
     for i, entry in enumerate(history):
         if kind_filter != "All" and entry.get("kind", "").lower() != kind_filter.lower():
             continue
         if search.strip():
             q = search.strip().lower()
             by_collector = get_results(entry)
-            urls = [r.get("url", "") for rows in by_collector.values() for r in rows]
+            urls = [r.get("url", "") for rows_c in by_collector.values() for r in rows_c]
             if not any(q in u.lower() for u in urls) and q not in entry.get("kind", "").lower():
                 continue
-        filtered.append(i)
-    return filtered
+
+        kind = entry.get("kind", "?")
+        kind_label = {
+            "unified": "Unified",
+            "screenshot": "Screenshots",
+            "seo": "Quick SEO",
+            "fast_seo": "Fast SEO",
+            "extraction": "Extraction",
+        }.get(kind, kind)
+
+        total = entry.get("total", 0)
+        ok = entry.get("ok", 0)
+        fail = entry.get("fail", 0)
+        success_rate = f"{(ok / total * 100):.0f}%" if total else "—"
+
+        rows.append({
+            "idx": i,
+            "timestamp": entry.get("timestamp", "")[:19],
+            "kind": kind_label,
+            "urls": total,
+            "ok": ok,
+            "fail": fail,
+            "success_rate": success_rate,
+            "duration": entry.get("duration", "—"),
+            "output_dir": entry.get("output_dir", ""),
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["idx", "timestamp", "kind", "urls", "ok", "fail", "success_rate", "duration", "output_dir"])
+
+    return pd.DataFrame(rows)
 
 
-def _render_action_bar(
-    entry: dict,
-    selected_rows: dict[str, list[int]],
-    key_prefix: str,
-) -> None:
+def _render_run_table(df: pd.DataFrame) -> int | None:
+    if df.empty:
+        st.info("No runs match the current filters.")
+        return None
+
+    col_config = {
+        "idx": None,
+        "timestamp": st.column_config.TextColumn("Date / Time", width="medium"),
+        "kind": st.column_config.TextColumn("Type", width="small"),
+        "urls": st.column_config.NumberColumn("URLs", width="small", format="%d"),
+        "ok": st.column_config.NumberColumn("✓ OK", width="small", format="%d"),
+        "fail": st.column_config.NumberColumn("✗ Fail", width="small", format="%d"),
+        "success_rate": st.column_config.TextColumn("Success", width="small"),
+        "duration": st.column_config.TextColumn("Duration", width="small"),
+        "output_dir": st.column_config.TextColumn("Output Folder", width="medium"),
+    }
+
+    event = st.dataframe(
+        df,
+        width="stretch",
+        hide_index=True,
+        column_config=col_config,
+        column_order=["timestamp", "kind", "urls", "ok", "fail", "success_rate", "duration", "output_dir"],
+        on_select="rerun",
+        selection_mode="single-row",
+        key="dash_run_table",
+    )
+
+    sel_rows = getattr(event, "selection", None)
+    sel_rows = getattr(sel_rows, "rows", []) if sel_rows else []
+    if sel_rows:
+        return df.iloc[sel_rows[0]]["idx"]
+    return None
+
+
+def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], key_prefix: str) -> None:
     by_collector = get_results(entry)
     output_dir = Path(entry.get("output_dir", ""))
+    collectors = entry.get("collectors", list(by_collector.keys()))
+    labels = {"screenshot": "Screenshots", "seo": "Quick SEO", "extraction": "Custom Rules"}
+    available = [c for c in collectors if by_collector.get(c)]
 
-    c_rerun, c_recapture, c_del, c_csv, c_zip, _ = st.columns([2, 2, 1, 1, 1, 3])
+    st.markdown("---")
+    st.markdown(f"### Run Details — {entry.get('timestamp', '')[:19]}")
 
-    with c_rerun:
-        rerun_urls: list[str] = []
+    meta_cols = st.columns(4)
+    meta_cols[0].metric("Total URLs", entry.get("total", 0))
+    meta_cols[1].metric("✓ Passed", entry.get("ok", 0))
+    meta_cols[2].metric("✗ Failed", entry.get("fail", 0))
+    meta_cols[3].metric("Collectors", len(available))
+
+    if entry.get("duration"):
+        st.caption(f"Duration: {entry['duration']}")
+    if entry.get("fast_mode"):
+        st.caption("⚡ Fast mode (curl_cffi)")
+    if entry.get("extraction_rules"):
+        st.caption(f"Extraction rules: {len(entry['extraction_rules'])} fields")
+
+    st.markdown("---")
+
+    action_cols = st.columns([2, 2, 1, 1, 1, 3])
+    with action_cols[0]:
+        rerun_urls = []
         for kind, rows in selected_rows.items():
             for idx in rows:
                 collector_rows = by_collector.get(kind, [])
@@ -78,7 +159,7 @@ def _render_action_bar(
             st.session_state["_newrun_from_dashboard"] = True
             st.rerun()
 
-    with c_recapture:
+    with action_cols[1]:
         all_urls = get_urls_from_results(entry)
         if st.button(
             f"Re-capture all ({len(all_urls)})",
@@ -96,11 +177,11 @@ def _render_action_bar(
             st.session_state["_newrun_from_dashboard"] = True
             st.rerun()
 
-    with c_del:
-        if st.button("Delete", key=f"{key_prefix}del", width="stretch"):
-            st.session_state["_dash_delete_idx"] = True
+    with action_cols[2]:
+        if st.button("Delete", key=f"{key_prefix}del", width="stretch", type="secondary"):
+            st.session_state["_dash_delete_confirm"] = entry.get("output_dir", "")
 
-    with c_csv:
+    with action_cols[3]:
         all_results = [r for rows in by_collector.values() for r in rows]
         has_csv = any(kind in ("seo", "extraction") for kind in by_collector)
         if has_csv and all_results:
@@ -115,7 +196,7 @@ def _render_action_bar(
                 key=f"{key_prefix}dl_csv", width="stretch",
             )
 
-    with c_zip:
+    with action_cols[4]:
         has_screenshot = "screenshot" in by_collector and by_collector["screenshot"]
         if has_screenshot:
             st.download_button(
@@ -124,24 +205,25 @@ def _render_action_bar(
                 key=f"{key_prefix}dl_zip", width="stretch",
             )
 
+    if st.session_state.get("_dash_delete_confirm") == entry.get("output_dir", ""):
+        st.warning(f"Delete `{entry.get('output_dir', '')}`? This cannot be undone.")
+        c_yes, c_no, _ = st.columns([1, 1, 4])
+        with c_yes:
+            if st.button("Yes, delete", type="primary", key=f"{key_prefix}del_yes"):
+                delete_history_entry(load_history().index(entry) if entry in load_history() else 0)
+                st.session_state.pop("_dash_delete_confirm", None)
+                st.rerun()
+        with c_no:
+            if st.button("Cancel", key=f"{key_prefix}del_no"):
+                st.session_state.pop("_dash_delete_confirm", None)
+                st.rerun()
 
-def _render_collector_tabs(
-    entry: dict,
-    selected_rows: dict[str, list[int]],
-    key_prefix: str,
-) -> None:
-    by_collector = get_results(entry)
-    output_dir = Path(entry.get("output_dir", ""))
-    collectors = entry.get("collectors", list(by_collector.keys()))
-    labels = {"screenshot": "Screenshots", "seo": "Quick SEO", "extraction": "Custom Rules"}
-    available = [c for c in collectors if by_collector.get(c)]
     if not available:
         st.info("No collector results in this run.")
         return
 
-    tab_labels = [labels.get(c, c) for c in available]
-    tabs = st.tabs(tab_labels)
-    for tab, kind in zip(tabs, available):
+    tabs = st.tabs([labels.get(c, c) for c in available] + ["Summary"])
+    for tab, kind in zip(tabs[:-1], available):
         with tab:
             rows = by_collector[kind]
             view_key = f"{key_prefix}{kind}_view"
@@ -151,18 +233,11 @@ def _render_collector_tabs(
 
             vc1, vc2, vc3, vc4 = st.columns([1, 1, 2, 3])
             with vc1:
-                view = st.segmented_control(
-                    "View", ["Grid", "List"], key=view_key, label_visibility="collapsed",
-                )
+                view = st.segmented_control("View", ["Grid", "List"], key=view_key, label_visibility="collapsed")
             with vc2:
-                status_filter = st.segmented_control(
-                    "Filter", ["All", "OK", "Failed"], key=filter_key, label_visibility="collapsed",
-                )
+                status_filter = st.segmented_control("Filter", ["All", "OK", "Failed"], key=filter_key, label_visibility="collapsed")
             with vc3:
-                url_search = st.text_input(
-                    "Search", key=search_key, placeholder="Filter by URL...",
-                    label_visibility="collapsed",
-                )
+                url_search = st.text_input("Search", key=search_key, placeholder="Filter by URL...", label_visibility="collapsed")
 
             filtered = rows
             if status_filter == "OK":
@@ -183,13 +258,57 @@ def _render_collector_tabs(
                 sel = render_results_list(filtered, kind, output_dir, key_prefix=f"{key_prefix}{kind}_")
 
             if sel:
-                # Map filtered indices back to original indices
                 orig_indices = [rows.index(r) for r in sel]
                 selected_rows[kind] = orig_indices
             elif sel_key in st.session_state and st.session_state[sel_key]:
                 selected_rows[kind] = st.session_state[sel_key]
             else:
                 selected_rows.pop(kind, None)
+
+    with tabs[-1]:
+        total = sum(len(by_collector[c]) for c in available)
+        ok = sum(1 for c in available for r in by_collector[c] if r.get("status") == "ok")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total steps", total)
+        c2.metric("OK", ok)
+        c3.metric("Failed", total - ok)
+        st.caption(f"Output: `{output_dir}`")
+
+        dl_cols = st.columns(3)
+        with dl_cols[0]:
+            if by_collector.get("screenshot"):
+                st.download_button(
+                    "Screenshots ZIP",
+                    data=build_zip(by_collector["screenshot"], output_dir),
+                    file_name="screenshots.zip", mime="application/zip",
+                    key=f"{key_prefix}zip", width="stretch",
+                )
+        with dl_cols[1]:
+            if by_collector.get("seo"):
+                all_keys = list(dict.fromkeys(k for r in by_collector["seo"] for k in r))
+                csv_buf = io.StringIO()
+                writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(by_collector["seo"])
+                st.download_button(
+                    "SEO CSV",
+                    data=csv_buf.getvalue().encode(),
+                    file_name="seo_results.csv", mime="text/csv",
+                    key=f"{key_prefix}dl_seo", width="stretch",
+                )
+        with dl_cols[2]:
+            if by_collector.get("extraction"):
+                all_keys = list(dict.fromkeys(k for r in by_collector["extraction"] for k in r))
+                csv_buf = io.StringIO()
+                writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(by_collector["extraction"])
+                st.download_button(
+                    "Extraction CSV",
+                    data=csv_buf.getvalue().encode(),
+                    file_name="extraction_results.csv", mime="text/csv",
+                    key=f"{key_prefix}dl_ext", width="stretch",
+                )
 
 
 def page_dashboard() -> None:
@@ -202,42 +321,35 @@ def page_dashboard() -> None:
     _render_metrics(history)
     st.markdown("---")
 
-    fc1, fc2, fc3 = st.columns([2, 1, 1])
+    fc1, fc2, fc3 = st.columns([3, 1, 1])
     with fc1:
-        search = st.text_input(
-            "Search", placeholder="Filter by URL...", key="dash_search", label_visibility="collapsed",
-        )
+        search = st.text_input("Search", placeholder="Filter by URL...", key="dash_search", label_visibility="collapsed")
     with fc2:
         kind_filter = st.selectbox(
             "Kind", ["All", "unified", "screenshot", "seo", "fast_seo", "extraction"],
             key="dash_kind_filter", label_visibility="collapsed",
         )
     with fc3:
-        pass
+        st.markdown("")  # spacer
 
-    filtered_indices = _render_run_list(history, search, kind_filter)
-    if not filtered_indices:
-        st.info("No runs match the search.")
+    df = _build_run_table(history, search, kind_filter)
+    selected_idx = _render_run_table(df)
+
+    if selected_idx is None:
+        st.info("Select a run from the table to view details and actions.")
         return
 
-    selected_run = st.selectbox(
-        "Select a run", options=filtered_indices,
-        format_func=lambda i: f"{history[i]['timestamp'][:19]} — {history[i].get('kind','?')} — {history[i].get('ok',0)}/{history[i].get('total',0)} OK",
-        key="dash_run_selector",
-    )
-    entry = history[selected_run]
+    entry = history[selected_idx]
     st.caption(
-        f"{entry['timestamp'][:19]} | {entry.get('total',0)} URLs | "
-        f"{entry.get('ok',0)} OK | {entry.get('fail',0)} failed | "
-        f"`{entry.get('output_dir','')}`"
+        f"{entry['timestamp'][:19]} | {entry.get('total', 0)} URLs | "
+        f"{entry.get('ok', 0)} OK | {entry.get('fail', 0)} failed | "
+        f"`{entry.get('output_dir', '')}`"
     )
 
-    if st.session_state.get("_dash_delete_idx"):
-        delete_history_entry(selected_run)
-        st.session_state.pop("_dash_delete_idx", None)
+    if st.session_state.get("_dash_delete_confirm") == entry.get("output_dir", ""):
+        delete_history_entry(selected_idx)
+        st.session_state.pop("_dash_delete_confirm", None)
         st.rerun()
 
     selected_rows: dict[str, list[int]] = {}
-    _render_action_bar(entry, selected_rows, key_prefix=f"dash_{selected_run}_")
-    st.markdown("---")
-    _render_collector_tabs(entry, selected_rows, key_prefix=f"dash_{selected_run}_")
+    _render_run_detail_drawer(entry, selected_rows, key_prefix=f"dash_{selected_idx}_")

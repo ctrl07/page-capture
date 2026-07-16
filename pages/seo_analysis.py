@@ -17,52 +17,170 @@ from analysis import (
 from runners import load_history
 
 
+def _get_seo_runs():
+    """Get all SEO-capable runs from history."""
+    history = load_history()
+    seo_runs = []
+    for i, h in enumerate(history):
+        kind = h.get("kind", "")
+        if kind in ("seo", "unified", "fast_seo"):
+            # For unified runs, check if SEO collector was used
+            if kind == "unified":
+                collectors = h.get("collectors", [])
+                # collectors can be list of strings or list of dicts
+                has_seo = any(
+                    (c == "seo" if isinstance(c, str) else c.get("name") == "seo")
+                    for c in collectors
+                )
+                if not has_seo:
+                    continue
+            seo_runs.append((i, h))
+    return seo_runs
+
+
+def _filter_issues_by_severity(issues, severities: list[str]):
+    """Filter issues by selected severities."""
+    if not severities or "All" in severities:
+        return issues
+    return [i for i in issues if i.severity in severities]
+
+
+def _get_page_level_issues(issues, ok_rows):
+    """Build page-level issue view for drill-down."""
+    page_issues = {}
+    for issue in issues:
+        for url in issue.urls:
+            if url not in page_issues:
+                page_issues[url] = []
+            page_issues[url].append(issue)
+    return page_issues
+
+
 def page_seo_analysis() -> None:
     st.subheader("SEO Analysis")
     st.caption("Post-crawl analysis with health score, issue detection, and visualisations.")
 
-    # Find SEO results — from last unified run or history
+    # ── Source Selection ──────────────────────────────────────────────
+    source_tabs = st.tabs(["Current Run", "History", "Compare Runs"])
+
     results = None
     source_label = ""
     output_dir = ""
+    selected_run_idx = None
 
-    # Check current session for unified runner results
-    if st.session_state.get("unified_runner"):
-        runner = st.session_state.unified_runner
-        if runner.results.get("seo"):
-            results = runner.results["seo"]
-            source_label = "Current run"
-            output_dir = str(runner.output_dir)
+    with source_tabs[0]:
+        # Current run
+        if st.session_state.get("unified_runner"):
+            runner = st.session_state.unified_runner
+            if runner.results.get("seo"):
+                results = runner.results["seo"]
+                source_label = "Current run"
+                output_dir = str(runner.output_dir)
+                st.success("Using current run results")
+            else:
+                st.info("Current run has no SEO data")
+        else:
+            st.info("No active run")
 
-    # Fallback: check history
-    if results is None:
-        history = load_history()
-        seo_runs = [
-            (i, h) for i, h in enumerate(history)
-            if h.get("kind") in ("seo", "unified", "fast_seo") and (
-                h.get("collectors", ["seo"] if h.get("kind") == "seo" else ["seo"]) or h.get("kind") == "seo"
-            )
-        ]
+    with source_tabs[1]:
+        # History selection
+        seo_runs = _get_seo_runs()
         if seo_runs:
             labels = [
-                f"{h['timestamp'][:19]} — {h.get('total', '?')} URLs ({h.get('ok', 0)} OK)"
+                f"{h['timestamp'][:19]} — {h.get('kind', '?').upper()} — {h.get('total', '?')} URLs ({h.get('ok', 0)} OK)"
                 for _, h in seo_runs
             ]
             selected = st.selectbox("Select a past SEO run", labels, key="seo_analysis_select")
             if selected:
                 idx = labels.index(selected)
-                _, entry = seo_runs[idx]
+                selected_run_idx, entry = seo_runs[idx]
                 results = entry.get("results", [])
                 source_label = f"History: {entry['timestamp'][:19]}"
                 output_dir = entry.get("output_dir", "")
+        else:
+            st.info("No SEO runs in history")
 
+    with source_tabs[2]:
+        # Compare runs
+        seo_runs = _get_seo_runs()
+        if len(seo_runs) >= 2:
+            st.caption("Select two runs to compare")
+            col_a, col_b = st.columns(2)
+            labels = [f"{h['timestamp'][:19]} — {h.get('kind','?')} — {h.get('ok',0)}/{h.get('total',0)}" for _, h in seo_runs]
+
+            with col_a:
+                sel_a = st.selectbox("Run A", labels, key="seo_compare_a")
+            with col_b:
+                sel_b = st.selectbox("Run B", labels, key="seo_compare_b")
+
+            if sel_a and sel_b and sel_a != sel_b:
+                idx_a = labels.index(sel_a)
+                idx_b = labels.index(sel_b)
+                _, entry_a = seo_runs[idx_a]
+                _, entry_b = seo_runs[idx_b]
+
+                results_a = entry_a.get("results", [])
+                results_b = entry_b.get("results", [])
+
+                issues_a = analyze_results(results_a)
+                issues_b = analyze_results(results_b)
+
+                ok_a = [r for r in results_a if r.get("status") == "ok"]
+                ok_b = [r for r in results_b if r.get("status") == "ok"]
+
+                score_a = compute_health_score(issues_a, len(ok_a))
+                score_b = compute_health_score(issues_b, len(ok_b))
+
+                summary_a = summarize_issues(issues_a)
+                summary_b = summarize_issues(issues_b)
+
+                st.markdown("---")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric(f"Run A — {score_a}/100", f"Errors: {summary_a['errors']} | Warnings: {summary_a['warnings']}")
+                with c2:
+                    st.metric(f"Run B — {score_b}/100", f"Errors: {summary_b['errors']} | Warnings: {summary_b['warnings']}")
+
+                # Category comparison
+                cats_a = group_issues_by_category(issues_a)
+                cats_b = group_issues_by_category(issues_b)
+                all_cats = set(cats_a.keys()) | set(cats_b.keys())
+
+                comp_data = []
+                for cat in sorted(all_cats):
+                    issues_ca = cats_a.get(cat, [])
+                    issues_cb = cats_b.get(cat, [])
+                    err_a = sum(i.count for i in issues_ca if i.severity == "error")
+                    err_b = sum(i.count for i in issues_cb if i.severity == "error")
+                    warn_a = sum(i.count for i in issues_ca if i.severity == "warning")
+                    warn_b = sum(i.count for i in issues_cb if i.severity == "warning")
+                    opp_a = sum(i.count for i in issues_ca if i.severity == "opportunity")
+                    opp_b = sum(i.count for i in issues_cb if i.severity == "opportunity")
+                    comp_data.append({
+                        "Category": cat.replace("_", " ").title(),
+                        "Run A Errors": err_a,
+                        "Run B Errors": err_b,
+                        "Δ Errors": err_b - err_a,
+                        "Run A Warnings": warn_a,
+                        "Run B Warnings": warn_b,
+                        "Δ Warnings": warn_b - warn_a,
+                        "Run A Opps": opp_a,
+                        "Run B Opps": opp_b,
+                        "Δ Opps": opp_b - opp_a,
+                    })
+                st.dataframe(pd.DataFrame(comp_data), width="stretch", hide_index=True)
+                return  # Early return for compare view
+        else:
+            st.info("Need at least 2 SEO runs to compare")
+
+    # ── No results ────────────────────────────────────────────────────
     if results is None:
         st.info("No SEO results available. Run a capture with the SEO collector enabled first.")
         return
 
     st.caption(f"Source: {source_label} — {len(results)} URL(s)")
 
-    # Run analysis
+    # ── Run analysis ──────────────────────────────────────────────────
     issues = analyze_results(results)
     ok_rows = [r for r in results if r.get("status") == "ok"]
     total_pages = len(ok_rows)
@@ -70,189 +188,273 @@ def page_seo_analysis() -> None:
     summary = summarize_issues(issues)
     categories = group_issues_by_category(issues)
 
-    # ── Health Score ──
+    # ── Health Score ──────────────────────────────────────────────────
     st.metric("Health Score", f"{health_score}/100", delta=None)
     st.progress(health_score / 100)
 
-    # ── Summary Metrics ──
-    m1, m2, m3, m4 = st.columns(4)
+    # ── Summary Metrics ───────────────────────────────────────────────
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total URLs", len(results))
     m2.metric("OK", total_pages)
     m3.metric("Errors", summary["errors"])
     m4.metric("Warnings", summary["warnings"])
+    m5.metric("Opportunities", summary["opportunities"])
 
     st.markdown("---")
 
-    # ── Issue Categories ──
+    # ── Severity Filter ───────────────────────────────────────────────
+    severity_options = ["All", "error", "warning", "opportunity"]
+    selected_severities = st.pills(
+        "Filter by severity",
+        options=severity_options,
+        selection_mode="multi",
+        default=["All"],
+        key="seo_severity_filter",
+    )
+
+    filtered_issues = _filter_issues_by_severity(issues, selected_severities)
+
+    # ── Issues by Category ────────────────────────────────────────────
     st.markdown("### Issues by Category")
-    if not categories:
-        st.success("No issues found. Great job!")
+    if not filtered_issues:
+        st.success("No issues match the current filter.")
     else:
+        # Category summary row
+        cat_cols = st.columns(min(len(categories), 5))
+        for idx, (cat, cat_issues) in enumerate(categories.items()):
+            if idx < 5:
+                with cat_cols[idx]:
+                    cat_name = cat.replace("_", " ").title()
+                    errors = sum(i.count for i in cat_issues if i.severity == "error")
+                    warns = sum(i.count for i in cat_issues if i.severity == "warning")
+                    opps = sum(i.count for i in cat_issues if i.severity == "opportunity")
+                    total = errors + warns + opps
+                    if total > 0:
+                        st.metric(cat_name, total, delta=f"🔴{errors} 🟡{warns} 🔵{opps}", delta_color="off")
+
+        st.markdown("")
+
         for cat, cat_issues in categories.items():
             cat_name = cat.replace("_", " ").title()
-            errors = sum(i.count for i in cat_issues if i.severity == "error")
-            warnings = sum(i.count for i in cat_issues if i.severity == "warning")
-            opps = sum(i.count for i in cat_issues if i.severity == "opportunity")
+            cat_issues_filtered = [i for i in cat_issues if i.severity in selected_severities or "All" in selected_severities]
+            if not cat_issues_filtered:
+                continue
+
+            errors = sum(i.count for i in cat_issues_filtered if i.severity == "error")
+            warnings = sum(i.count for i in cat_issues_filtered if i.severity == "warning")
+            opps = sum(i.count for i in cat_issues_filtered if i.severity == "opportunity")
 
             with st.expander(
-                f"{cat_name} -- {errors} errors, {warnings} warnings, {opps} opportunities"
+                f"{cat_name} — {errors} errors, {warnings} warnings, {opps} opportunities"
                 if errors + warnings + opps > 0
-                else f"{cat_name} -- no issues",
+                else f"{cat_name} — no issues",
                 expanded=errors > 0,
             ):
-                for issue in cat_issues:
+                for issue in cat_issues_filtered:
                     if issue.count == 0:
                         continue
                     badge = {"error": "🔴", "warning": "🟡", "opportunity": "🔵"}[issue.severity]
                     label = issue.name.replace("_", " ").title()
-                    st.markdown(f"{badge} **{label}** -- {issue.count} URL(s)")
-                    st.caption(issue.how_to_fix)
+
+                    # Issue header with severity badge
+                    issue_col1, issue_col2 = st.columns([1, 5])
+                    with issue_col1:
+                        st.markdown(f"### {badge}")
+                    with issue_col2:
+                        st.markdown(f"**{label}** — {issue.count} URL(s)")
+                        st.caption(issue.how_to_fix)
+
+                    # URL list with copy button
                     with st.expander(f"Show {issue.count} URL(s)", expanded=False):
-                        for u in issue.urls[:20]:
-                            st.text(u)
-                        if issue.count > 20:
-                            st.caption(f"... and {issue.count - 20} more")
+                        for idx, u in enumerate(issue.urls[:50]):
+                            url_cols = st.columns([10, 1])
+                            with url_cols[0]:
+                                st.text(u)
+                            with url_cols[1]:
+                                if st.button("📋", key=f"copy_{issue.name}_{idx}", help="Copy URL"):
+                                    st.toast(f"Copied: {u}")
+                        if issue.count > 50:
+                            st.caption(f"... and {issue.count - 50} more")
 
     st.markdown("---")
 
-    # ── Visualisations ──
+    # ── Page-Level View ───────────────────────────────────────────────
+    st.markdown("### Page-Level View")
+    st.caption("Drill down into issues per URL")
+
+    if ok_rows:
+        page_issues = _get_page_level_issues(filtered_issues, ok_rows)
+        urls_with_issues = list(page_issues.keys())
+
+        if urls_with_issues:
+            selected_url = st.selectbox(
+                "Select URL to inspect",
+                urls_with_issues,
+                format_func=lambda x: x[:80] + "..." if len(x) > 80 else x,
+                key="seo_page_select",
+            )
+
+            if selected_url:
+                page_data = next((r for r in ok_rows if r.get("url") == selected_url), {})
+                page_issues_list = page_issues[selected_url]
+
+                st.markdown(f"**{selected_url}**")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Title", page_data.get("title", "—")[:50])
+                c2.metric("H1", page_data.get("h1", "—")[:50])
+                c3.metric("Word Count", page_data.get("word_count", 0))
+
+                if page_issues_list:
+                    for issue in page_issues_list:
+                        badge = {"error": "🔴", "warning": "🟡", "opportunity": "🔵"}[issue.severity]
+                        st.markdown(f"{badge} **{issue.name.replace('_', ' ').title()}**")
+                        st.caption(issue.how_to_fix)
+                else:
+                    st.success("No issues for this page with current filter")
+        else:
+            st.info("No pages have issues with the current severity filter")
+    else:
+        st.info("No OK pages to inspect")
+
+    st.markdown("---")
+
+    # ── Visualisations ────────────────────────────────────────────────
     st.markdown("### Visualisations")
     if not ok_rows:
         st.info("No OK pages to visualise.")
-        return
-
-    viz1, viz2 = st.columns(2)
-
-    with viz1:
-        st.markdown("**Title Length Distribution**")
-        title_lens = [r.get("title_len", 0) for r in ok_rows if isinstance(r.get("title_len"), int)]
-        if title_lens:
-            buckets = {"0": 0, "1-29": 0, "30-60": 0, "61-70": 0, "70+": 0}
-            for tl in title_lens:
-                if tl == 0:
-                    buckets["0"] += 1
-                elif tl < 30:
-                    buckets["1-29"] += 1
-                elif tl <= 60:
-                    buckets["30-60"] += 1
-                elif tl <= 70:
-                    buckets["61-70"] += 1
-                else:
-                    buckets["70+"] += 1
-            st.bar_chart(pd.Series(buckets))
-        else:
-            st.info("No title length data.")
-
-    with viz2:
-        st.markdown("**Meta Description Length**")
-        meta_lens = [r.get("meta_desc_len", 0) for r in ok_rows if isinstance(r.get("meta_desc_len"), int)]
-        if meta_lens:
-            buckets = {"0": 0, "1-69": 0, "70-155": 0, "156-160": 0, "160+": 0}
-            for ml in meta_lens:
-                if ml == 0:
-                    buckets["0"] += 1
-                elif ml < 70:
-                    buckets["1-69"] += 1
-                elif ml <= 155:
-                    buckets["70-155"] += 1
-                elif ml <= 160:
-                    buckets["156-160"] += 1
-                else:
-                    buckets["160+"] += 1
-            st.bar_chart(pd.Series(buckets))
-        else:
-            st.info("No meta description length data.")
-
-    viz3, viz4 = st.columns(2)
-
-    with viz3:
-        st.markdown("**Word Count Distribution**")
-        word_counts = [r.get("word_count", 0) for r in ok_rows if isinstance(r.get("word_count"), int)]
-        if word_counts:
-            buckets = {"0": 0, "1-199": 0, "200-499": 0, "500-999": 0, "1000+": 0}
-            for wc in word_counts:
-                if wc == 0:
-                    buckets["0"] += 1
-                elif wc < 200:
-                    buckets["1-199"] += 1
-                elif wc < 500:
-                    buckets["200-499"] += 1
-                elif wc < 1000:
-                    buckets["500-999"] += 1
-                else:
-                    buckets["1000+"] += 1
-            st.bar_chart(pd.Series(buckets))
-        else:
-            st.info("No word count data.")
-
-    with viz4:
-        st.markdown("**URL Depth**")
-        url_depths = [r.get("url", "").count("/") - 2 for r in ok_rows]
-        url_depths = [max(d, 0) for d in url_depths]
-        if url_depths:
-            depth_counts = pd.Series(url_depths).value_counts().sort_index()
-            st.bar_chart(depth_counts)
-        else:
-            st.info("No URL data.")
-
-    # Social completeness
-    st.markdown("---")
-    st.markdown("### Social Tags Completeness")
-    soc1, soc2 = st.columns(2)
-
-    with soc1:
-        og_fields = ["og_title", "og_description", "og_image"]
-        og_complete = sum(1 for r in ok_rows if all(r.get(f) for f in og_fields))
-        og_partial = sum(1 for r in ok_rows if any(r.get(f) for f in og_fields) and not all(r.get(f) for f in og_fields))
-        og_none = total_pages - og_complete - og_partial
-        st.markdown("**Open Graph**")
-        st.bar_chart(pd.Series({"Complete": og_complete, "Partial": og_partial, "None": og_none}))
-
-    with soc2:
-        tw_fields = ["twitter_card", "twitter_title", "twitter_image"]
-        tw_complete = sum(1 for r in ok_rows if all(r.get(f) for f in tw_fields))
-        tw_partial = sum(1 for r in ok_rows if any(r.get(f) for f in tw_fields) and not all(r.get(f) for f in tw_fields))
-        tw_none = total_pages - tw_complete - tw_partial
-        st.markdown("**Twitter Cards**")
-        st.bar_chart(pd.Series({"Complete": tw_complete, "Partial": tw_partial, "None": tw_none}))
-
-    # ── Duplicate detection ──
-    st.markdown("---")
-    st.markdown("### Duplicate Detection")
-
-    dup_title_groups = {}
-    for r in ok_rows:
-        t = r.get("title", "")
-        if t:
-            dup_title_groups.setdefault(t, []).append(r.get("url", ""))
-    dup_title_groups = {k: v for k, v in dup_title_groups.items() if len(v) > 1}
-
-    if dup_title_groups:
-        st.warning(f"{len(dup_title_groups)} duplicate title(s) found")
-        for title, urls in list(dup_title_groups.items())[:5]:
-            with st.expander(f'"{title[:60]}..." — {len(urls)} pages'):
-                for u in urls:
-                    st.text(u)
     else:
-        st.success("No duplicate titles found.")
+        viz1, viz2 = st.columns(2)
 
-    dup_meta_groups = {}
-    for r in ok_rows:
-        m = r.get("meta_description", "")
-        if m:
-            dup_meta_groups.setdefault(m, []).append(r.get("url", ""))
-    dup_meta_groups = {k: v for k, v in dup_meta_groups.items() if len(v) > 1}
+        with viz1:
+            st.markdown("**Title Length Distribution**")
+            title_lens = [r.get("title_len", 0) for r in ok_rows if isinstance(r.get("title_len"), int)]
+            if title_lens:
+                buckets = {"0": 0, "1-29": 0, "30-60": 0, "61-70": 0, "70+": 0}
+                for tl in title_lens:
+                    if tl == 0:
+                        buckets["0"] += 1
+                    elif tl < 30:
+                        buckets["1-29"] += 1
+                    elif tl <= 60:
+                        buckets["30-60"] += 1
+                    elif tl <= 70:
+                        buckets["61-70"] += 1
+                    else:
+                        buckets["70+"] += 1
+                st.bar_chart(pd.Series(buckets))
+            else:
+                st.info("No title length data.")
 
-    if dup_meta_groups:
-        st.warning(f"{len(dup_meta_groups)} duplicate meta description(s) found")
-        for desc, urls in list(dup_meta_groups.items())[:5]:
-            with st.expander(f'"{desc[:60]}..." — {len(urls)} pages'):
-                for u in urls:
-                    st.text(u)
-    else:
-        st.success("No duplicate meta descriptions found.")
+        with viz2:
+            st.markdown("**Meta Description Length**")
+            meta_lens = [r.get("meta_desc_len", 0) for r in ok_rows if isinstance(r.get("meta_desc_len"), int)]
+            if meta_lens:
+                buckets = {"0": 0, "1-69": 0, "70-155": 0, "156-160": 0, "160+": 0}
+                for ml in meta_lens:
+                    if ml == 0:
+                        buckets["0"] += 1
+                    elif ml < 70:
+                        buckets["1-69"] += 1
+                    elif ml <= 155:
+                        buckets["70-155"] += 1
+                    elif ml <= 160:
+                        buckets["156-160"] += 1
+                    else:
+                        buckets["160+"] += 1
+                st.bar_chart(pd.Series(buckets))
+            else:
+                st.info("No meta description length data.")
 
-    # ── PDF Report ──
+        viz3, viz4 = st.columns(2)
+
+        with viz3:
+            st.markdown("**Word Count Distribution**")
+            word_counts = [r.get("word_count", 0) for r in ok_rows if isinstance(r.get("word_count"), int)]
+            if word_counts:
+                buckets = {"0": 0, "1-199": 0, "200-499": 0, "500-999": 0, "1000+": 0}
+                for wc in word_counts:
+                    if wc == 0:
+                        buckets["0"] += 1
+                    elif wc < 200:
+                        buckets["1-199"] += 1
+                    elif wc < 500:
+                        buckets["200-499"] += 1
+                    elif wc < 1000:
+                        buckets["500-999"] += 1
+                    else:
+                        buckets["1000+"] += 1
+                st.bar_chart(pd.Series(buckets))
+            else:
+                st.info("No word count data.")
+
+        with viz4:
+            st.markdown("**URL Depth**")
+            url_depths = [r.get("url", "").count("/") - 2 for r in ok_rows]
+            url_depths = [max(d, 0) for d in url_depths]
+            if url_depths:
+                depth_counts = pd.Series(url_depths).value_counts().sort_index()
+                st.bar_chart(depth_counts)
+            else:
+                st.info("No URL data.")
+
+        # Social completeness
+        st.markdown("---")
+        st.markdown("### Social Tags Completeness")
+        soc1, soc2 = st.columns(2)
+
+        with soc1:
+            og_fields = ["og_title", "og_description", "og_image"]
+            og_complete = sum(1 for r in ok_rows if all(r.get(f) for f in og_fields))
+            og_partial = sum(1 for r in ok_rows if any(r.get(f) for f in og_fields) and not all(r.get(f) for f in og_fields))
+            og_none = total_pages - og_complete - og_partial
+            st.markdown("**Open Graph**")
+            st.bar_chart(pd.Series({"Complete": og_complete, "Partial": og_partial, "None": og_none}))
+
+        with soc2:
+            tw_fields = ["twitter_card", "twitter_title", "twitter_image"]
+            tw_complete = sum(1 for r in ok_rows if all(r.get(f) for f in tw_fields))
+            tw_partial = sum(1 for r in ok_rows if any(r.get(f) for f in tw_fields) and not all(r.get(f) for f in tw_fields))
+            tw_none = total_pages - tw_complete - tw_partial
+            st.markdown("**Twitter Cards**")
+            st.bar_chart(pd.Series({"Complete": tw_complete, "Partial": tw_partial, "None": tw_none}))
+
+        # Duplicate detection
+        st.markdown("---")
+        st.markdown("### Duplicate Detection")
+
+        dup_title_groups = {}
+        for r in ok_rows:
+            t = r.get("title", "")
+            if t:
+                dup_title_groups.setdefault(t, []).append(r.get("url", ""))
+        dup_title_groups = {k: v for k, v in dup_title_groups.items() if len(v) > 1}
+
+        if dup_title_groups:
+            st.warning(f"{len(dup_title_groups)} duplicate title(s) found")
+            for title, urls in list(dup_title_groups.items())[:10]:
+                with st.expander(f'"{title[:60]}..." — {len(urls)} pages'):
+                    for u in urls:
+                        st.text(u)
+        else:
+            st.success("No duplicate titles found.")
+
+        dup_meta_groups = {}
+        for r in ok_rows:
+            m = r.get("meta_description", "")
+            if m:
+                dup_meta_groups.setdefault(m, []).append(r.get("url", ""))
+        dup_meta_groups = {k: v for k, v in dup_meta_groups.items() if len(v) > 1}
+
+        if dup_meta_groups:
+            st.warning(f"{len(dup_meta_groups)} duplicate meta description(s) found")
+            for desc, urls in list(dup_meta_groups.items())[:10]:
+                with st.expander(f'"{desc[:60]}..." — {len(urls)} pages'):
+                    for u in urls:
+                        st.text(u)
+        else:
+            st.success("No duplicate meta descriptions found.")
+
+    # ── PDF Report ────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### Export Report")
     pdf_bytes = generate_pdf_report(results, issues, health_score, output_dir)
