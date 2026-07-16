@@ -12,6 +12,7 @@ dependencies = [
     "fpdf2>=2.8.0",
     "curl_cffi>=0.15",
     "lxml>=5.0",
+    "crawl4ai>=0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -36,3 +37,8 @@ include = ["app.py", "runners.py", "extraction.py", "importers.py", "page_captur
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411",
+]

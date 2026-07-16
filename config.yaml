@@ -162,3 +162,28 @@ timing:
 viewport:
   height: 1080
   width: 1920
+
+crawl4ai:
+  # Crawl4AI configuration for fast SEO crawling
+  rate_limit_rps: 10          # Requests per second per domain
+  rate_limit_burst: 1         # Burst allowance
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  # proxy: "http://user:pass@proxy.example.com:8080"  # Optional proxy
+  timeout: 60                 # Request timeout in seconds
+  wait_until: "load"          # Page load wait condition: "load", "domcontentloaded", "networkidle", "commit"
+  wait_for_timeout: 30000     # Wait condition timeout in ms
+  navigation_timeout: 90000   # Navigation timeout in ms
+  # Anti-bot bypass options
+  simulate_user: true         # Simulate human-like mouse/keyboard
+  magic: true                 # Auto-detect and handle common protections
+  override_navigator: true    # Spoof navigator.webdriver, plugins, languages
+  user_agent_mode: "random"   # Rotate user agents: "random", "desktop", "mobile"
+  session_id: "default"       # Reuse browser context across URLs (persistence)
+  mean_delay: 2.0             # Base delay between requests (seconds)
+  max_range: 3.0              # Random delay range: mean_delay ± max_range
+  # remove_overlay_elements: true  # Disable - causes navigation context errors
+  # remove_consent_popups: true    # Disable - causes navigation context errors
+  # Browser config
+  headless: true
+  viewport_width: 1920
+  viewport_height: 1080

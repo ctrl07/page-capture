@@ -9,7 +9,19 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from runners import FastRunner, UnifiedRunner, build_zip
+from runners import FastRunnerLegacy, UnifiedRunner, build_zip
+
+
+def _empty_state(icon: str, title: str, message: str, action_label: str = "", action_callback=None) -> None:
+    """Render a consistent empty state."""
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown(f"# {icon}")
+        st.markdown(f"## {title}")
+        st.markdown(message)
+        if action_label and action_callback:
+            if st.button(action_label, type="primary", width="stretch"):
+                action_callback()
 
 
 def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix: str = "") -> None:
@@ -23,6 +35,21 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
         c1.metric("Total", len(results))
         c2.metric("OK", ok_count)
         c3.metric("Failed", fail_count)
+
+        if kind == "screenshot" and ok_count > 0:
+            st.markdown("---")
+            zip_key = f"{key_prefix}zip_data"
+            if zip_key not in st.session_state:
+                st.session_state[zip_key] = build_zip([r for r in results if r.get("status") == "ok"], output_dir)
+            st.download_button(
+                "Download All Screenshots (ZIP)",
+                data=st.session_state[zip_key],
+                file_name="screenshots.zip",
+                mime="application/zip",
+                key=f"{key_prefix}dl_zip",
+                width="stretch",
+                type="primary",
+            )
 
     with tabs[1]:
         # ── Filters ──
@@ -57,7 +84,11 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
             filtered = [r for r in filtered if q in r.get("url", "").lower()]
 
         if not filtered:
-            st.info("No results match the current filters.")
+            _empty_state(
+                "🔍",
+                "No results match",
+                f"Try adjusting your filters or search.\n\n**Current filters:** Status: {status_filter}, Search: '{search}'",
+            )
         else:
             df = pd.DataFrame(filtered)
             hide_cols = {"png", "pdf", "file"}
@@ -66,9 +97,9 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
 
             col_cfg: dict = {}
             if "url" in display_df.columns:
-                col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True)
+                col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True, width="large")
             if "status" in display_df.columns:
-                col_cfg["status"] = st.column_config.TextColumn("Status")
+                col_cfg["status"] = st.column_config.TextColumn("Status", width="small")
 
             event = st.dataframe(
                 display_df, width="stretch", hide_index=True,
@@ -84,11 +115,15 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                 row = filtered[idx]
                 st.markdown("---")
                 st.markdown(f"**{row.get('url', '')}**")
+
                 with st.expander("Details", expanded=True):
                     for k, v in row.items():
                         if k in ("png", "pdf", "file"):
                             continue
-                        st.text(f"{k}: {v}")
+                        if isinstance(v, (dict, list)):
+                            st.json(v)
+                        else:
+                            st.text(f"{k}: {v}")
 
                 notes_key = f"{key_prefix}notes_{idx}"
                 notes_val = st.session_state.get(notes_key, "")
@@ -105,28 +140,40 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                                 "Download PDF", data=f,
                                 file_name=pdf_path.name, mime="application/pdf",
                                 key=f"{key_prefix}preview_pdf_{idx}",
+                                width="stretch",
                             )
 
-        if kind == "screenshot" and filtered:
-            zip_key = f"{key_prefix}zip_data"
-            if zip_key not in st.session_state:
-                st.session_state[zip_key] = build_zip(filtered, output_dir)
-            st.download_button(
-                "Download ZIP", data=st.session_state[zip_key],
-                file_name="screenshots.zip", mime="application/zip",
-                key=f"{key_prefix}dl_zip",
-            )
-        if kind in ("seo", "extraction") and filtered:
-            all_keys = list(dict.fromkeys(k for r in filtered for k in r))
-            csv_buf = io.StringIO()
-            writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(filtered)
-            st.download_button(
-                "Download CSV", data=csv_buf.getvalue().encode(),
-                file_name=f"{kind}_results.csv", mime="text/csv",
-                key=f"{key_prefix}dl_csv",
-            )
+            # Download buttons for filtered results
+            st.markdown("---")
+            dl_cols = st.columns(3)
+            if kind == "screenshot" and filtered:
+                with dl_cols[0]:
+                    zip_key = f"{key_prefix}zip_data_filtered"
+                    if zip_key not in st.session_state:
+                        st.session_state[zip_key] = build_zip(filtered, output_dir)
+                    st.download_button(
+                        "Download Filtered (ZIP)",
+                        data=st.session_state[zip_key],
+                        file_name="screenshots_filtered.zip",
+                        mime="application/zip",
+                        key=f"{key_prefix}dl_zip_filtered",
+                        width="stretch",
+                    )
+            if kind in ("seo", "extraction") and filtered:
+                with dl_cols[1]:
+                    all_keys = list(dict.fromkeys(k for r in filtered for k in r))
+                    csv_buf = io.StringIO()
+                    writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(filtered)
+                    st.download_button(
+                        "Download Filtered (CSV)",
+                        data=csv_buf.getvalue().encode(),
+                        file_name=f"{kind}_results_filtered.csv",
+                        mime="text/csv",
+                        key=f"{key_prefix}dl_csv_filtered",
+                        width="stretch",
+                    )
 
     with tabs[2]:
         if kind == "screenshot":
@@ -136,11 +183,17 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                 if r.get("file") and Path(r.get("file", "")).is_file()
             ]
             if not indexed:
-                st.info("No screenshots available.")
+                _empty_state(
+                    "🖼️",
+                    "No screenshots available",
+                    "Run a capture with the Screenshots collector enabled to generate screenshots.",
+                )
             else:
                 selected = st.selectbox(
-                    "Choose screenshot", options=[f for f, _ in indexed],
-                    format_func=lambda x: Path(x).name, key=f"{key_prefix}preview_sel",
+                    "Choose screenshot",
+                    options=[f for f, _ in indexed],
+                    format_func=lambda x: Path(x).name,
+                    key=f"{key_prefix}preview_sel",
                 )
                 if selected:
                     st.image(selected, width="stretch")
@@ -151,6 +204,7 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                                 "Download PNG", data=f,
                                 file_name=Path(selected).name,
                                 mime="image/png", key=f"{key_prefix}preview_dl",
+                                width="stretch",
                             )
                     sel_idx = next(i for f, i in indexed if f == selected)
                     pdf_file = results[sel_idx].get("pdf", "")
@@ -161,12 +215,17 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                                     "Download PDF", data=f,
                                     file_name=Path(pdf_file).name,
                                     mime="application/pdf", key=f"{key_prefix}preview_pdf_dl",
+                                    width="stretch",
                                 )
         else:
-            st.info("Preview not available for this result type.")
+            _empty_state(
+                "📊",
+                "Preview not available",
+                f"Preview is only available for screenshot results. This is a {kind} result set.",
+            )
 
 
-def render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str = "") -> None:
+def render_unified_results(runner: UnifiedRunner | FastRunnerLegacy, key_prefix: str = "") -> None:
     output_dir = runner.output_dir
     collectors_attr = getattr(runner, "collectors", None)
     if collectors_attr:
@@ -177,9 +236,13 @@ def render_unified_results(runner: UnifiedRunner | FastRunner, key_prefix: str =
         "screenshot": "Screenshots", "seo": "Quick SEO",
         "extraction": "Custom Rules",
     }
-    available = [c for c in collectors if runner.results.get(c)]
+    available = [c for c in collectors if c in runner.results]
     if not available:
-        st.info("No collector produced results.")
+        _empty_state(
+            "📦",
+            "No results available",
+            "This run didn't produce any results. Check the run logs for errors.",
+        )
         return
 
     tab_labels = [labels[c] if c in labels else c for c in available] + ["Summary"]
@@ -244,7 +307,11 @@ def render_results_grid(results: list[dict], kind: str, output_dir: Path, key_pr
         if r.get("file") and Path(r.get("file", "")).is_file()
     ]
     if not indexed:
-        st.info("No screenshots available.")
+        _empty_state(
+            "🖼️",
+            "No screenshots available",
+            "Run a capture with the Screenshots collector enabled to generate screenshots.",
+        )
         return []
 
     selected: list[dict] = []
@@ -258,10 +325,25 @@ def render_results_grid(results: list[dict], kind: str, output_dir: Path, key_pr
                 st.image(str(file_path), width="stretch")
                 st.caption(file_path.stem)
                 status = row.get("status", "")
-                badge = "OK" if status == "ok" else "Failed"
-                st.text(badge)
+                badge = "✅ OK" if status == "ok" else "❌ Failed"
+                st.markdown(f"**{badge}**")
                 if st.checkbox("Select", key=f"{key_prefix}grid_cb_{orig_idx}"):
                     selected.append(row)
+
+    if selected:
+        st.markdown(f"**{len(selected)} screenshot(s) selected**")
+        zip_key = f"{key_prefix}grid_zip"
+        if zip_key not in st.session_state:
+            st.session_state[zip_key] = build_zip(selected, output_dir)
+        st.download_button(
+            "Download Selected (ZIP)",
+            data=st.session_state[zip_key],
+            file_name="screenshots_selected.zip",
+            mime="application/zip",
+            key=f"{key_prefix}grid_dl_zip",
+            width="stretch",
+            type="primary",
+        )
 
     return selected
 
@@ -275,9 +357,9 @@ def render_results_list(results: list[dict], kind: str, output_dir: Path, key_pr
 
     col_cfg: dict = {}
     if "url" in display_df.columns:
-        col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True)
+        col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True, width="large")
     if "status" in display_df.columns:
-        col_cfg["status"] = st.column_config.TextColumn("Status")
+        col_cfg["status"] = st.column_config.TextColumn("Status", width="small")
 
     event = st.dataframe(
         display_df, width="stretch", hide_index=True,
@@ -289,5 +371,33 @@ def render_results_list(results: list[dict], kind: str, output_dir: Path, key_pr
     sel_rows = getattr(event, "selection", None)
     sel_rows = getattr(sel_rows, "rows", []) if sel_rows else []
     if sel_rows:
-        return [results[i] for i in sel_rows if i < len(results)]
+        selected = [results[i] for i in sel_rows if i < len(results)]
+        st.markdown(f"**{len(selected)} row(s) selected**")
+        if kind in ("seo", "extraction"):
+            csv_buf = io.StringIO()
+            all_keys = list(dict.fromkeys(k for r in selected for k in r))
+            writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(selected)
+            st.download_button(
+                "Download Selected (CSV)",
+                data=csv_buf.getvalue().encode(),
+                file_name=f"{kind}_selected.csv",
+                mime="text/csv",
+                key=f"{key_prefix}list_dl_csv",
+                width="stretch",
+            )
+        elif kind == "screenshot":
+            zip_key = f"{key_prefix}list_zip"
+            if zip_key not in st.session_state:
+                st.session_state[zip_key] = build_zip(selected, output_dir)
+            st.download_button(
+                "Download Selected (ZIP)",
+                data=st.session_state[zip_key],
+                file_name="screenshots_selected.zip",
+                mime="application/zip",
+                key=f"{key_prefix}list_dl_zip",
+                width="stretch",
+            )
+        return selected
     return []

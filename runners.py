@@ -95,6 +95,7 @@ def build_runtime_config(CONFIG: dict, viewport: dict, stabilization_ms: int) ->
         "timing": {**CONFIG["timing"], "stabilization_ms": stabilization_ms},
         "hide": CONFIG.get("hide", {}),
         "hide_visibility": CONFIG.get("hide_visibility", {}),
+        "crawl4ai": CONFIG.get("crawl4ai", {}),
     }
 
 
@@ -631,7 +632,7 @@ def _fetch_and_extract(
     return data
 
 
-class FastRunner:
+class FastRunnerLegacy:
     """Fast crawl using curl_cffi + ThreadPoolExecutor with cookies from SeleniumBase.
 
     Flow:
@@ -761,6 +762,278 @@ class FastRunner:
         save_history({
             "timestamp": datetime.now().isoformat(),
             "kind": "fast_seo",
+            "total": total,
+            "ok": ok_count,
+            "fail": total - ok_count,
+            "output_dir": str(output_dir),
+            "results": items,
+            "fast_mode": True,
+            "collectors": ["seo"],
+        })
+
+
+# ── Crawl4AI Runner ────────────────────────────────────────────────────────────
+
+
+class Crawl4AIRunner:
+    """Fast SEO crawl using Crawl4AI (async Playwright + structured output)."""
+
+    _thread: Optional[threading.Thread]
+
+    def __init__(
+        self,
+        urls: list[str],
+        runtime_cfg: dict,
+        output_dir: Path,
+        seo_fields: list[dict] | None = None,
+    ):
+        self.urls = urls
+        self.runtime_cfg = runtime_cfg
+        self.output_dir = output_dir
+        self.seo_fields = seo_fields  # kept for compatibility; crawl4ai returns all fields
+        self.results: dict[str, list[dict]] = {"seo": []}
+        self.cancelled = False
+        self._thread = None
+        self.status = "queued"
+        self.progress_total = len(urls)
+        self.progress_done = 0
+
+    def _crawl4ai_config(self) -> dict:
+        """Build Crawl4AI configuration from runtime config and crawl4ai.yaml."""
+        c4ai = self.runtime_cfg.get("crawl4ai", {})
+        return {
+            "rate_limit": (c4ai.get("rate_limit_rps", 10), c4ai.get("rate_limit_burst", 1)),
+            "timeout": c4ai.get("timeout", 30),
+            "wait_until": c4ai.get("wait_until", "domcontentloaded"),
+            "wait_for_timeout": c4ai.get("wait_for_timeout", 15000),
+            "headless": c4ai.get("headless", True),
+            "viewport_width": c4ai.get("viewport_width", self.runtime_cfg["viewport"]["width"]),
+            "viewport_height": c4ai.get("viewport_height", self.runtime_cfg["viewport"]["height"]),
+            "user_agent": c4ai.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
+            "simulate_user": c4ai.get("simulate_user", True),
+            "magic": c4ai.get("magic", True),
+            "override_navigator": c4ai.get("override_navigator", True),
+            "user_agent_mode": c4ai.get("user_agent_mode", "random"),
+            "session_id": c4ai.get("session_id", "default"),
+            "mean_delay": c4ai.get("mean_delay", 1.0),
+            "max_range": c4ai.get("max_range", 2.0),
+            "navigation_timeout": c4ai.get("navigation_timeout", 60000),
+        }
+
+    def _transform_result(self, result) -> dict:
+        """Transform Crawl4AI CrawlResult to existing SEO dict format."""
+        # Handle case where result might be None or missing attributes
+        if result is None:
+            return {
+                "url": "", "status": "error: no result", "status_code": 0,
+                "title": "", "title_len": 0, "meta_description": "", "meta_desc_len": 0,
+                "canonical": "", "robots_meta": "", "h1": "", "h2s": "", "h3s": "",
+                "og_title": "", "og_description": "", "og_image": "", "og_type": "",
+                "og_url": "", "og_site_name": "", "og_locale": "",
+                "twitter_card": "", "twitter_title": "", "twitter_description": "",
+                "twitter_image": "", "twitter_site": "", "schema_types": "",
+                "word_count": 0, "internal_links": 0, "external_links": 0,
+                "images_missing_alt": 0, "images_total": 0, "images_no_lazy": 0,
+                "iframe_count": 0, "form_count": 0, "external_nofollow": 0,
+                "html_lang": "", "meta_viewport": "", "meta_charset": "",
+                "hreflang": "", "jsonld_full": "",
+            }
+
+        md = result.metadata or {}
+        # Extract internal/external link counts
+        internal = md.get("internal_links", []) or []
+        external = md.get("external_links", []) or []
+        schema_types = md.get("schema", []) or []
+
+        url = getattr(result, "url", "") or ""
+        success = getattr(result, "success", False)
+        error_msg = getattr(result, "error_message", None) or "unknown"
+        status_code = getattr(result, "status_code", 0) or 0
+
+        return {
+            "url": url,
+            "status": "ok" if success else f"error: {error_msg}",
+            "status_code": status_code,
+            "title": md.get("title", ""),
+            "title_len": len(md.get("title", "")),
+            "meta_description": md.get("description") or "",
+            "meta_desc_len": len(md.get("description") or ""),
+            "canonical": md.get("canonical", ""),
+            "robots_meta": md.get("robots", ""),
+            "h1": md.get("h1", ""),
+            "h2s": " | ".join(md.get("h2", [])) if isinstance(md.get("h2"), list) else str(md.get("h2", "")),
+            "h3s": " | ".join(md.get("h3", [])) if isinstance(md.get("h3"), list) else str(md.get("h3", "")),
+            "og_title": md.get("og_title", ""),
+            "og_description": md.get("og_description", ""),
+            "og_image": md.get("og_image", ""),
+            "og_type": md.get("og_type", ""),
+            "og_url": md.get("og_url", ""),
+            "og_site_name": md.get("og_site_name", ""),
+            "og_locale": md.get("og_locale", ""),
+            "twitter_card": md.get("twitter_card", ""),
+            "twitter_title": md.get("twitter_title", ""),
+            "twitter_description": md.get("twitter_description", ""),
+            "twitter_image": md.get("twitter_image", ""),
+            "twitter_site": md.get("twitter_site", ""),
+            "schema_types": " | ".join(schema_types) if isinstance(schema_types, list) else str(schema_types),
+            "word_count": md.get("word_count", 0),
+            "internal_links": len(internal),
+            "external_links": len(external),
+            "images_missing_alt": md.get("images_missing_alt", 0),
+            "images_total": md.get("images_total", 0),
+            "images_no_lazy": md.get("images_no_lazy", 0),
+            "iframe_count": md.get("iframe_count", 0),
+            "form_count": md.get("form_count", 0),
+            "external_nofollow": md.get("external_nofollow", 0),
+            "html_lang": md.get("html_lang", ""),
+            "meta_viewport": md.get("meta_viewport", ""),
+            "meta_charset": md.get("meta_charset", ""),
+            "hreflang": md.get("hreflang", ""),
+            "jsonld_full": md.get("jsonld_full", ""),
+        }
+
+    def run(self):
+        import asyncio
+
+        from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
+
+        self.results = {"seo": []}
+        self.progress_done = 0
+        self.status = "Starting Crawl4AI..."
+
+        output_dir = self.output_dir
+        data_dir = output_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        cfg = self._crawl4ai_config()
+
+        run_cfg = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            wait_until=cfg["wait_until"],
+            wait_for_timeout=cfg["wait_for_timeout"],
+            page_timeout=cfg["timeout"] * 1000,
+            session_id=cfg.get("session_id") or "persistent_session",
+            mean_delay=cfg.get("mean_delay", 1.0),
+            max_range=cfg.get("max_range", 2.0),
+            override_navigator=cfg.get("override_navigator", True),
+            user_agent_mode=cfg.get("user_agent_mode", "random"),
+        )
+
+        async def _run_all():
+            # Single crawler instance reused across all retries for cookie/session persistence
+            async with AsyncWebCrawler(
+                headless=cfg["headless"],
+                verbose=False,
+                viewport_width=cfg["viewport_width"],
+                viewport_height=cfg["viewport_height"],
+                user_agent=cfg["user_agent"],
+                rate_limit=cfg["rate_limit"],
+                simulate_user=cfg.get("simulate_user", True),
+                magic=cfg.get("magic", True),
+                override_navigator=cfg.get("override_navigator", True),
+                user_agent_mode=cfg.get("user_agent_mode", "random"),
+                proxy_config=cfg.get("proxy"),
+            ) as crawler:
+
+                async def _crawl(urls: list[str]):
+                    """Crawl a list of URLs, returning results for each."""
+                    try:
+                        results = await crawler.arun_many(
+                            urls,
+                            config=run_cfg,
+                            max_concurrent=cfg["rate_limit"][0] if isinstance(cfg["rate_limit"], tuple) else 8,
+                        )
+                    except Exception as e:
+                        # Navigation errors (e.g., ERR_ABORTED) throw instead of returning failed results
+                        # Create failed results for all URLs so they get retried
+                        self.status = f"Navigation error: {e}, will retry..."
+                        items = []
+                        for url in urls:
+                            if self.cancelled:
+                                break
+                            items.append({
+                                "url": url,
+                                "status": f"error: {e}",
+                                "status_code": 0,
+                            })
+                        return items
+
+                    # arun_many returns list in 0.9.x, async generator in older versions
+                    if hasattr(results, "__aiter__"):
+                        results_list = []
+                        async for r in results:
+                            results_list.append(r)
+                        results = results_list
+
+                    # Type guard: results is now a list
+                    results = list(results)  # type: ignore[assignment]
+
+                    items = []
+                    for i, result in enumerate(results):
+                        if self.cancelled:
+                            break
+                        self.progress_done = i + 1
+                        self.status = f"Processing {result.url}"
+                        row = self._transform_result(result)
+                        items.append(row)
+
+                    return items
+
+                # Initial crawl
+                items = await _crawl(self.urls)
+
+                # Retry failed/blocked (status != ok, non-200, empty content, or nav errors)
+                # Uses SAME crawler instance so cookies/session persist across retries
+                max_retries = 3
+                for attempt in range(max_retries):
+                    blocked = [
+                        it for it in items
+                        if not (it.get("status") == "ok" and it.get("status_code") == 200 and it.get("title", "") and it.get("word_count", 0) > 0)
+                    ]
+                    if not blocked or self.cancelled:
+                        break
+                    self.status = f"Retrying {len(blocked)} failed URLs (attempt {attempt + 1}/{max_retries})..."
+                    retry_urls = [it["url"] for it in blocked]
+
+                    retried = await _crawl(retry_urls)
+
+                    by_url = {r["url"]: r for r in retried}
+                    for it in items:
+                        u = it.get("url")
+                        if u in by_url:
+                            it.clear()
+                            it.update(by_url[u])
+                    self.progress_done = min(len(items), self.progress_total)
+
+                return items
+
+        # Run async crawl in background thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            items = loop.run_until_complete(_run_all())
+        finally:
+            loop.close()
+
+        self.results["seo"] = items
+        self.progress_done = self.progress_total
+        self.status = "done"
+
+        self.results["seo"] = items
+        self.progress_done = self.progress_total
+        self.status = "done"
+
+        if items:
+            _compute_internal_inlinks(items)
+
+        csv_path = data_dir / "seo_results.csv"
+        write_results_csv(items, csv_path)
+
+        total = len(items)
+        ok_count = sum(1 for r in items if r.get("status") == "ok")
+        save_history({
+            "timestamp": datetime.now().isoformat(),
+            "kind": "crawl4ai_seo",
             "total": total,
             "ok": ok_count,
             "fail": total - ok_count,

@@ -79,21 +79,21 @@ class TestFetchAndExtract:
 
 
 class TestFastRunner:
-    """Tests for FastRunner."""
+    """Tests for FastRunnerLegacy."""
 
     def test_import(self):
-        from runners import FastRunner
-        assert FastRunner is not None
+        from runners import FastRunnerLegacy
+        assert FastRunnerLegacy is not None
 
     def test_init(self, tmp_path):
-        from runners import FastRunner
+        from runners import FastRunnerLegacy
 
         urls = ["https://example.com", "https://example.com/about"]
         runtime_cfg = {
             "viewport": {"width": 1920, "height": 1080},
             "timing": {"stabilization_ms": 800, "inter_page_delay_min": 0.3, "inter_page_delay_max": 0.5},
         }
-        runner = FastRunner(urls, runtime_cfg, tmp_path / "output")
+        runner = FastRunnerLegacy(urls, runtime_cfg, tmp_path / "output")
         assert runner.urls == urls
         assert runner.progress_total == 2
         assert runner.progress_done == 0
@@ -103,10 +103,10 @@ class TestFastRunner:
 
     def test_init_with_seo_fields(self, tmp_path):
         from extraction import get_standard_seo_fields
-        from runners import FastRunner
+        from runners import FastRunnerLegacy
 
         fields = get_standard_seo_fields()
-        runner = FastRunner(
+        runner = FastRunnerLegacy(
             ["https://example.com"],
             {"viewport": {"width": 800, "height": 600}, "timing": {"stabilization_ms": 500}},
             tmp_path / "out",
