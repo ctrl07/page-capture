@@ -1,0 +1,90 @@
+# Page Capture — Design Tokens (Dark Mode Only)
+
+colors:
+  primary: "#3B82F6"
+  primary_hover: "#60A5FA"
+  primary_light: "#1E3A5F"
+  success: "#22C55E"
+  success_light: "#14532D"
+  warning: "#FBBF24"
+  warning_light: "#78350F"
+  error: "#EF4444"
+  error_light: "#7F1D1D"
+  info: "#06B6D4"
+  info_light: "#164E63"
+
+  bg_primary: "#0F172A"
+  bg_secondary: "#1E293B"
+  bg_tertiary: "#334155"
+  bg_hover: "#475569"
+  bg_active: "#64748B"
+
+  border_subtle: "#334155"
+  border_default: "#475569"
+  border_strong: "#64748B"
+
+  text_primary: "#F8FAFC"
+  text_secondary: "#E2E8F0"
+  text_muted: "#94A3B8"
+  text_inverse: "#0F172A"
+  text_on_primary: "#FFFFFF"
+
+  shadow_sm: "0 1px 2px 0 rgb(0 0 0 / 0.3)"
+  shadow_md: "0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3)"
+  shadow_lg: "0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.3)"
+
+  focus_ring: "#3B82F6"
+  overlay_backdrop: "rgba(0, 0, 0, 0.6)"
+
+spacing:
+  xs: 4
+  sm: 8
+  md: 16
+  lg: 24
+  xl: 32
+  xxl: 48
+
+radius:
+  sm: 4
+  md: 8
+  lg: 12
+  xl: 16
+  full: 9999
+
+typography:
+  font_family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+  font_mono: "'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace"
+  size_xs: 12
+  size_sm: 14
+  size_md: 16
+  size_lg: 18
+  size_xl: 20
+  size_2xl: 24
+  size_3xl: 30
+  weight_normal: 400
+  weight_medium: 500
+  weight_semibold: 600
+  weight_bold: 700
+  line_height_tight: 1.25
+  line_height_normal: 1.5
+  line_height_relaxed: 1.75
+
+transitions:
+  fast: "150ms ease"
+  normal: "200ms ease"
+  slow: "300ms ease"
+
+z_index:
+  dropdown: 100
+  sticky: 200
+  modal: 300
+  popover: 400
+  tooltip: 500
+  toast: 600
+
+breakpoints:
+  sm: 640
+  md: 768
+  lg: 1024
+  xl: 1280
+  xxl: 1536
