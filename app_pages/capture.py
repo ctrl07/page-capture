@@ -29,6 +29,36 @@ from state import register_runner, unregister_runner
 
 CONFIG = load_config(HERE / "config.yaml")
 
+# ── Crawl4AI Quick-Start Presets ─────────────────────────────────────────────
+CRAWL_PRESETS = {
+    "Just my URLs": {
+        "max_depth": 0, "max_pages": 100,
+        "strip_query_params": True, "respect_robots_txt": True,
+        "include_patterns": "", "exclude_patterns": "",
+        "allowed_domains": "", "blocked_domains": "",
+    },
+    "Crawl entire site": {
+        "max_depth": 3, "max_pages": 1000,
+        "strip_query_params": True, "respect_robots_txt": True,
+        "include_patterns": "", "exclude_patterns": "",
+        "allowed_domains": "", "blocked_domains": "",
+    },
+    "Blogs & articles": {
+        "max_depth": 2, "max_pages": 500,
+        "strip_query_params": True, "respect_robots_txt": True,
+        "include_patterns": "/blog/\n/news/\n/article/",
+        "exclude_patterns": "/tag/\n/author/\n?page=",
+        "allowed_domains": "", "blocked_domains": "",
+    },
+    "Products & shop": {
+        "max_depth": 2, "max_pages": 2000,
+        "strip_query_params": True, "respect_robots_txt": True,
+        "include_patterns": "/product/\n/item/\n/p/\n/category/",
+        "exclude_patterns": "/cart\n/checkout\n/account\n?sort=",
+        "allowed_domains": "", "blocked_domains": "",
+    },
+}
+
 
 def _render_active_run() -> None:
     """Show the currently running job with live progress."""
@@ -330,84 +360,162 @@ def _render_settings_panel() -> tuple[dict, str, dict]:
     # Crawl4AI specific configuration panel
     crawl_config = {}
     if crawl_mode == "crawl4ai":
-        crawl_exp = st.expander("Crawl4AI Configuration", expanded=True, on_change="rerun")
-        if crawl_exp.open:
-            with crawl_exp:
-                cc1, cc2 = st.columns(2)
-                with cc1:
-                    st.number_input(
-                        "Max Depth",
-                        min_value=0,
-                        max_value=10,
-                        value=st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
-                        key="newrun_max_depth",
-                        help="0 = initial URLs only, 1+ = follow links up to N hops",
-                    )
-                    st.number_input(
-                        "Max Pages",
-                        min_value=1,
-                        max_value=10000,
-                        value=st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
-                        key="newrun_max_pages",
-                        help="Maximum total pages to crawl (safety limit)",
-                    )
-                    st.toggle(
-                        "Strip Query Parameters",
-                        value=st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
-                        key="newrun_strip_query_params",
-                        help="Remove URL parameters before deduplication",
-                    )
-                    st.toggle(
-                        "Respect Robots.txt",
-                        value=st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
-                        key="newrun_respect_robots_txt",
-                        help="Check and obey robots.txt rules",
-                    )
-                with cc2:
-                    st.text_area(
-                        "Include Patterns (regex)",
-                        value="\n".join(st.session_state.get("newrun_include_patterns", CONFIG["crawl4ai"]["include_patterns"])),
-                        key="newrun_include_patterns",
-                        help="Only crawl URLs matching these patterns (one per line)",
-                        height=70,
-                    )
-                    st.text_area(
-                        "Exclude Patterns (regex)",
-                        value="\n".join(st.session_state.get("newrun_exclude_patterns", CONFIG["crawl4ai"]["exclude_patterns"])),
-                        key="newrun_exclude_patterns",
-                        help="Skip URLs matching these patterns (one per line)",
-                        height=70,
-                    )
-                    st.text_area(
-                        "Allowed Domains",
-                        value="\n".join(st.session_state.get("newrun_allowed_domains", CONFIG["crawl4ai"]["allowed_domains"])),
-                        key="newrun_allowed_domains",
-                        help="Only crawl URLs from these domains (one per line)",
-                        height=70,
-                    )
-                    st.text_area(
-                        "Blocked Domains",
-                        value="\n".join(st.session_state.get("newrun_blocked_domains", CONFIG["crawl4ai"]["blocked_domains"])),
-                        key="newrun_blocked_domains",
-                        help="Skip URLs from these domains (one per line)",
-                        height=70,
-                    )
+        with st.container(border=True):
+            st.markdown("**Crawl Settings**")
 
-                raw_include = st.session_state.get("newrun_include_patterns", "")
-                raw_exclude = st.session_state.get("newrun_exclude_patterns", "")
+            # ── Quick Setup ──
+            preset_names = list(CRAWL_PRESETS.keys())
+            preset = st.selectbox(
+                "Quick setup (you can still customize below):",
+                ["Custom", *preset_names],
+                key="newrun_crawl_preset",
+                label_visibility="collapsed",
+                help="Choose a preset to auto-fill the settings below, then tweak anything you like.",
+            )
+            if preset != "Custom":
+                for k, v in CRAWL_PRESETS[preset].items():
+                    st.session_state[f"newrun_{k}"] = v
+                st.session_state.pop("newrun_crawl_preset", None)
+                st.rerun()
+
+            # ── Settings Grid ──
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                depth = st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"])
+                st.number_input(
+                    "🔗 How many links to follow",
+                    min_value=0, max_value=10, value=depth,
+                    key="newrun_max_depth",
+                    help="0 = Only scan the URLs you entered. "
+                         "1 = Also scan links found on those pages. "
+                         "2 = Also scan links found on those pages, and so on.",
+                )
+                depth_label = {0: "🔵 Just your URLs", 1: "🟡 One level deep",
+                               2: "🟠 Two levels deep"}.get(depth, "🔴 Deep crawl (many pages)")
+                st.caption(depth_label)
+
+                st.number_input(
+                    "📄 Maximum pages to scan",
+                    min_value=1, max_value=100000,
+                    value=st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                    key="newrun_max_pages",
+                    help="Safety limit to prevent accidentally scanning too many pages.",
+                )
+
+                if depth > 2:
+                    st.warning("Following links 3+ levels deep can scan thousands of pages and may take a long time.")
+                if st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]) > 5000:
+                    st.warning("Scanning over 5,000 pages can get your IP blocked by some websites. Increase only if needed.")
+
+                st.toggle(
+                    "🧹 Ignore tracking codes (?utm_source=, ?ref=, etc.)",
+                    value=st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
+                    key="newrun_strip_query_params",
+                    help="Removes things like ?utm_source=facebook so pages with different tracking codes aren't scanned twice.",
+                )
+                st.toggle(
+                    "🤖 Follow site crawling rules (recommended)",
+                    value=st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                    key="newrun_respect_robots_txt",
+                    help="Most websites have a 'robots.txt' file that tells crawlers which pages to skip. "
+                         "Enabling this is polite and helps avoid being blocked.",
+                )
+
+                st.text_area(
+                    "✅ Only scan URLs containing...",
+                    value="\n".join(st.session_state.get("newrun_include_patterns", CONFIG["crawl4ai"]["include_patterns"])),
+                    key="newrun_include_patterns",
+                    help="One per line. Only pages whose web address contains these words will be scanned. "
+                         "Leave empty to scan all URLs.\n\n"
+                         "Example:\n  /blog/\n  /news/",
+                    height=80,
+                )
+                st.text_area(
+                    "❌ Skip URLs containing...",
+                    value="\n".join(st.session_state.get("newrun_exclude_patterns", CONFIG["crawl4ai"]["exclude_patterns"])),
+                    key="newrun_exclude_patterns",
+                    help="One per line. Pages whose web address contains these words will be skipped.\n\n"
+                         "Example:\n  /tag/\n  ?page=",
+                    height=80,
+                )
+
+            with cc2:
+                seed_urls = st.session_state.get("capture_urls", [])
+                if seed_urls:
+                    from urllib.parse import urlparse as _urlparse
+                    detected = set()
+                    for u in seed_urls:
+                        try:
+                            detected.add(_urlparse(u).netloc)
+                        except Exception:
+                            pass
+                    if detected:
+                        st.caption(f"Detected website(s): {', '.join(sorted(detected))}")
+
+                st.text_area(
+                    "🌐 Stay on these websites only",
+                    value="\n".join(st.session_state.get("newrun_allowed_domains", CONFIG["crawl4ai"]["allowed_domains"])),
+                    key="newrun_allowed_domains",
+                    help="One domain per line. Only pages from these websites will be scanned.\n"
+                         "Leave empty to automatically stay on the same website(s) as your starting URLs.\n\n"
+                         "Example:\n  example.com\n  blog.example.com",
+                    height=80,
+                )
+                st.text_area(
+                    "🚫 Skip these websites",
+                    value="\n".join(st.session_state.get("newrun_blocked_domains", CONFIG["crawl4ai"]["blocked_domains"])),
+                    key="newrun_blocked_domains",
+                    help="One domain per line. Pages from these websites will never be scanned.\n\n"
+                         "Example:\n  facebook.com\n  twitter.com",
+                    height=80,
+                )
+
                 raw_allowed = st.session_state.get("newrun_allowed_domains", "")
-                raw_blocked = st.session_state.get("newrun_blocked_domains", "")
+                if not raw_allowed.strip() and depth > 0:
+                    st.info("ℹ️ We'll automatically stay on the same website(s) as your starting URLs.")
 
-                crawl_config = {
-                    "max_depth": st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
-                    "max_pages": st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
-                    "include_patterns": [p.strip() for p in raw_include.split("\n") if p.strip()] if raw_include else [],
-                    "exclude_patterns": [p.strip() for p in raw_exclude.split("\n") if p.strip()] if raw_exclude else [],
-                    "strip_query_params": st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
-                    "respect_robots_txt": st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
-                    "allowed_domains": [d.strip() for d in raw_allowed.split("\n") if d.strip()] if raw_allowed else [],
-                    "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
-                }
+            # ── Scope Estimate ──
+            st.markdown("---")
+            url_count = len(seed_urls)
+            if url_count == 0:
+                st.info("Add URLs above to see an estimate of how many pages will be scanned.")
+            else:
+                if depth == 0:
+                    estimated = url_count
+                elif depth == 1:
+                    estimated = min(url_count * 10, 10000)
+                elif depth == 2:
+                    estimated = min(url_count * 50, 50000)
+                else:
+                    estimated = min(url_count * (10 ** depth), 100000)
+                max_p = st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"])
+                estimated = min(estimated, max_p)
+
+                secs = estimated * 2
+                if secs < 60:
+                    time_str = f"~{int(secs)} sec"
+                elif secs < 3600:
+                    time_str = f"~{int(secs // 60)} min"
+                else:
+                    time_str = f"~{secs / 3600:.1f} hr"
+
+                st.caption(f"📊 Estimated: **{estimated} page(s)** | {time_str}")
+
+            raw_include = st.session_state.get("newrun_include_patterns", "")
+            raw_exclude = st.session_state.get("newrun_exclude_patterns", "")
+            raw_allowed = st.session_state.get("newrun_allowed_domains", "")
+            raw_blocked = st.session_state.get("newrun_blocked_domains", "")
+
+            crawl_config = {
+                "max_depth": st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
+                "max_pages": st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                "include_patterns": [p.strip() for p in raw_include.split("\n") if p.strip()] if raw_include else [],
+                "exclude_patterns": [p.strip() for p in raw_exclude.split("\n") if p.strip()] if raw_exclude else [],
+                "strip_query_params": st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
+                "respect_robots_txt": st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                "allowed_domains": [d.strip() for d in raw_allowed.split("\n") if d.strip()] if raw_allowed else [],
+                "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
+            }
 
     viewport = {"width": int(CONFIG["viewport"]["width"]), "height": int(CONFIG["viewport"]["height"])}
     return viewport, crawl_mode, crawl_config
