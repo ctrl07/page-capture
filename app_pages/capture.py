@@ -229,13 +229,15 @@ def _render_collectors_panel() -> dict[str, bool]:
     """Render collector toggles for SEO and Custom Rules (Screenshots is separate)."""
     collectors = st.session_state.newrun_collectors
 
-    with st.container(horizontal=True, gap="small"):
+    tc1, tc2 = st.columns(2)
+    with tc1:
         collectors["seo"] = st.toggle(
             "SEO data",
             value=collectors.get("seo", True),
             key="newrun_do_seo",
             help="Title, meta, headings, OG tags, schema, word count, links, alt text.",
         )
+    with tc2:
         collectors["extraction"] = st.toggle(
             "Custom rules",
             value=collectors.get("extraction", False),
@@ -311,17 +313,16 @@ def _render_settings_panel() -> tuple[dict, str, dict]:
     crawl_mode = st.segmented_control(
         "Crawl mode",
         options=["unified", "fast", "crawl4ai"],
-        default=st.session_state.get("newrun_crawl_mode", "unified"),
+        default=st.session_state.get("newrun_crawl_mode", "fast"),
         key="newrun_crawl_mode",
         format_func=lambda x: {"unified": "Normal", "fast": "Fast", "crawl4ai": "Crawl4AI"}[x],
         help="Normal: SeleniumBase (screenshots + SEO + extraction)\n"
-             "Fast: curl_cffi (SEO only, 8 concurrent)\n"
+             "Fast (default): curl_cffi (SEO only, 8 concurrent)\n"
              "Crawl4AI: Playwright async (SEO only, structured output)",
     )
 
-    # Disable screenshot collector for fast modes
-    if crawl_mode in ("Fast", "Crawl4AI"):
-        st.info("Screenshots disabled in Fast/Crawl4AI modes — use SEO / Custom Rules collectors only.")
+    # Disable screenshot collector for non-unified modes
+    if crawl_mode != "unified":
         collectors = st.session_state.newrun_collectors
         collectors["screenshot"] = False
         st.session_state.newrun_collectors = collectors
@@ -537,8 +538,9 @@ def page_new_run() -> None:
             st.markdown("### Collectors")
             _render_collectors_panel()
 
-            st.markdown("---")
-            _render_screenshot_section()
+            if st.session_state.get("newrun_crawl_mode") == "unified":
+                st.markdown("---")
+                _render_screenshot_section()
 
             st.markdown("---")
             st.markdown("### Settings")
