@@ -13,6 +13,7 @@ S:\capture\page-capture\
 S:\capture\page-capture\
   ├── app.py              # Slim router (53 lines) — wires pages into st.navigation
   ├── state.py            # Session state init + active-run persistence (module-level registry + disk manifest)
+  ├── project.py          # Project management — create/delete/edit projects, associate runs
   ├── runners.py          # FastRunner, UnifiedRunner, CaptureRunner, ExtractionRunner + helpers
   ├── page_capture.py     # PageCapture class (SeleniumBase CDP wrapper) — smooth scroll with network idle detection
   ├── extraction.py       # CSS selector extraction rule engine
@@ -24,12 +25,13 @@ S:\capture\page-capture\
   ├── uv.lock             # Lockfile
   ├── pages/              # Streamlit page modules
   │   ├── capture.py      # New Capture — import, configure, run, monitor, results
-  │   ├── dashboard.py    # Run management — browse runs, grid/list views, re-run/re-capture
+  │   ├── dashboard.py    # Run management — browse runs, grid/list views, re-run/re-capture, project filter
+  │   ├── projects.py     # Project management — create/edit/delete, view associated runs
   │   ├── rule_sets.py    # Extraction rule editor (CSS selectors, regex, save/load/delete)
   │   ├── seo_analysis.py # Post-crawl SEO health check with PDF report
   │   └── settings.py     # Config editor
   ├── components/         # Reusable Streamlit components
-  │   ├── progress.py     # run_with_progress() — polls runner thread, updates progress bar + ETA
+  │   ├── progress.py     # run_with_progress() — callback-based progress with polling fallback
   │   └── results_viewer.py # render_results(), render_results_grid(), render_results_list(), render_unified_results()
   └── rulesets/           # Saved extraction rule sets (JSON)
 ```
@@ -40,11 +42,12 @@ S:\capture\page-capture\
 ```
 Capture
   🚀 Capture            (page_new_run)  — default page
-  📊 Dashboard          (page_dashboard) — run management, re-run, re-capture
+  📊 Dashboard          (page_dashboard) — run management, re-run, re-capture, project filter
 Tools
   📋 Rule Sets          (page_rule_sets)
   📈 SEO Analysis       (page_seo_analysis)
 Library
+  📁 Projects           (page_projects)
   ⚙️ Settings           (page_settings)
 ```
 
@@ -71,9 +74,10 @@ Library
 
 ### Key Patterns
 - **Network idle scroll**: After each scroll step, JS checks `img.complete` + `pendingFetch/pendingXHR === 0`; polls every 100ms up to 5s timeout. Configurable via `scroll_wait_for_idle`, `scroll_idle_timeout_ms`, `scroll_idle_poll_ms` in config.yaml.
-- **Progress polling**: `run_with_progress()` polls `runner._thread.is_alive()` every 300ms, updates progress bar with rolling ETA
+- **Callback-based progress**: `run_with_progress()` registers a `progress_callback` on the runner. All runner classes invoke the callback on progress changes (done/total/status). Falls back to direct attribute polling when no callback is provided.
 - **Session State**: `capture_urls`, `unified_runner`, `unified_running`, `extraction_rules`
 - **URLs passed between pages**: `st.session_state.capture_urls` (Dashboard → Capture)
+- **Projects**: Named collections of runs stored in `.projects.json`. Create/edit/delete projects, add/remove runs via dashboard drawer. Filter dashboard by project.
 - **History**: Flat JSON file `.run_history.json`, last 50 entries. UnifiedRunner saves to `results_by_collector` key; all other runners save to `results` key. `get_results()` helper normalizes both formats.
 - **Results viewer**: Grid view (thumbnails + checkboxes), List view (multi-row dataframe selection), status filter, URL search, row-click detail panel
 - **Dashboard re-run**: Select rows → "Re-run selected" queues only those URLs; "Re-capture all" queues all URLs. Restores collectors, extraction rules, and fast mode from history entry.
@@ -103,7 +107,7 @@ Library
 - Fast crawl (`FastRunner` — curl_cffi TLS impersonation, 8 concurrent, Turnstile retry)
 - Network idle scroll (waits for images + fetch/XHR instead of fixed delay)
 - Smooth scroll (down + smooth up, not instant jump to top)
-- Dashboard with run management (browse, search, filter by kind)
+- Dashboard with run management (browse, search, filter by kind, project filter)
 - Grid view (thumbnail gallery with checkboxes) and list view (multi-row dataframe selection)
 - Re-run selected URLs and re-capture all from dashboard
 - Restore collectors, extraction rules, fast mode on re-run from history
@@ -113,12 +117,9 @@ Library
 - Import URLs (manual, sitemap URL, sitemap XML, CSV, WP XML)
 - SEO Analysis (post-crawl health check with PDF report)
 - `launch.bat` one-click launcher (auto-installs uv)
+- Project system — create/edit/delete projects, add/remove runs, filter dashboard by project
+- Callback-based progress — all runners support progress_callback, progress.py uses callback registry
 - 124 tests passing
-
-### Pending
-- Dark mode toggle
-- Project system (scope TBD)
-- Callback-based progress (replacing polling) — planned but not yet implemented
 
 ## Key Decisions
 - **No cloud deployment** — local-only desktop app, no CI/CD

@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from components.results_viewer import render_results_grid, render_results_list
+from project import add_run_to_project, list_projects, remove_run_from_project
 from runners import (
     build_zip,
     delete_history_entry,
@@ -128,6 +129,40 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
         st.caption("⚡ Fast mode (curl_cffi)")
     if entry.get("extraction_rules"):
         st.caption(f"Extraction rules: {len(entry['extraction_rules'])} fields")
+
+    # ── Project assignment ──────────────────────────────────────────────────
+    projects = list_projects()
+    current_project_ids = [
+        p["id"] for p in projects
+        if load_history().index(entry) in p.get("run_indices", [])
+    ]
+    entry_idx = load_history().index(entry)
+
+    with st.container(border=True):
+        st.markdown("**Project**")
+        if current_project_ids:
+            assigned = [p for p in projects if p["id"] in current_project_ids]
+            st.caption(f"In: {', '.join(p['name'] for p in assigned)}")
+        else:
+            st.caption("Not assigned to any project")
+
+        proj_names = ["(None)"] + [p["name"] for p in projects]
+        selected = st.selectbox(
+            "Add to project", proj_names,
+            key=f"dash_proj_add_{entry_idx}",
+            label_visibility="collapsed",
+        )
+        if selected and selected != "(None)":
+            project = next(p for p in projects if p["name"] == selected)
+            if add_run_to_project(project["id"], entry_idx):
+                st.success(f"Added to '{selected}'")
+                st.rerun()
+
+        if current_project_ids:
+            if st.button("Remove from current project", key=f"dash_proj_rm_{entry_idx}"):
+                for pid in current_project_ids:
+                    remove_run_from_project(pid, entry_idx)
+                st.rerun()
 
     st.markdown("---")
 
@@ -321,7 +356,7 @@ def page_dashboard() -> None:
     _render_metrics(history)
     st.markdown("---")
 
-    fc1, fc2, fc3 = st.columns([3, 1, 1])
+    fc1, fc2, fc3, fc4 = st.columns([2, 1, 1, 1])
     with fc1:
         search = st.text_input("Search", placeholder="Filter by URL...", key="dash_search", label_visibility="collapsed")
     with fc2:
@@ -330,7 +365,19 @@ def page_dashboard() -> None:
             key="dash_kind_filter", label_visibility="collapsed",
         )
     with fc3:
+        project_filter = st.selectbox(
+            "Project", ["All"] + [p["name"] for p in list_projects()],
+            key="dash_project_filter", label_visibility="collapsed",
+        )
+    with fc4:
         st.markdown("")  # spacer
+
+    # Filter by project
+    if project_filter != "All":
+        project = next((p for p in list_projects() if p["name"] == project_filter), None)
+        if project:
+            project_indices = set(project.get("run_indices", []))
+            history = [h for i, h in enumerate(history) if i in project_indices]
 
     df = _build_run_table(history, search, kind_filter)
     selected_idx = _render_run_table(df)

@@ -19,7 +19,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import img2pdf
 from PIL import Image
@@ -197,16 +197,24 @@ def get_urls_from_results(entry: dict) -> list[str]:
 
 
 class CaptureRunner:
-    def __init__(self, urls: list[str], runtime_cfg: dict, output_dir: Path, kind: str = "screenshot", generate_pdf: bool = False, seo_fields: list[dict] | None = None):
+    def __init__(self, urls: list[str], runtime_cfg: dict, output_dir: Path, kind: str = "screenshot", generate_pdf: bool = False, seo_fields: list[dict] | None = None, progress_callback: Callable[[int, int, str], None] | None = None):
         self.urls = urls
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.kind = kind
         self.generate_pdf = generate_pdf
         self.seo_fields = seo_fields
+        self.progress_callback = progress_callback
         self.results = []
         self.cancelled = False
         self._thread = None
+        self.progress_total = len(urls)
+        self.progress_done = 0
+        self.status = "queued"
+
+    def _report_progress(self) -> None:
+        if self.progress_callback:
+            self.progress_callback(self.progress_done, self.progress_total, self.status)
 
     def run(self):
         self.results = []
@@ -219,12 +227,15 @@ class CaptureRunner:
         data_dir = output_dir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         results = self.results
+        self.status = "Running..."
+        self._report_progress()
 
         with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
             page = PageCapture(sb, runtime_cfg)
             for i, url in enumerate(urls):
                 if self.cancelled:
                     break
+                self.status = f"Processing {url}"
                 slug = slugify(url)
                 row = {"url": url, "status": "waiting"}
                 try:
@@ -260,10 +271,15 @@ class CaptureRunner:
                 except Exception as exc:
                     row = {"url": url, "status": f"error: {exc}"}
                 results.append(row)
+                self.progress_done += 1
+                self._report_progress()
                 time.sleep(random.uniform(
                     runtime_cfg["timing"]["inter_page_delay_min"],
                     runtime_cfg["timing"]["inter_page_delay_max"],
                 ))
+
+        self.status = "done"
+        self._report_progress()
 
         # Compute internal_inlinks from outlink counts across all pages
         if kind == "seo":
@@ -287,14 +303,22 @@ class CaptureRunner:
 
 
 class ExtractionRunner:
-    def __init__(self, urls: list[str], rules: list[dict], runtime_cfg: dict, output_dir: Path):
+    def __init__(self, urls: list[str], rules: list[dict], runtime_cfg: dict, output_dir: Path, progress_callback: Callable[[int, int, str], None] | None = None):
         self.urls = urls
         self.rules = rules
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
+        self.progress_callback = progress_callback
         self.results = []
         self.cancelled = False
         self._thread = None
+        self.progress_total = len(urls)
+        self.progress_done = 0
+        self.status = "queued"
+
+    def _report_progress(self) -> None:
+        if self.progress_callback:
+            self.progress_callback(self.progress_done, self.progress_total, self.status)
 
     def run(self):
         self.results = []
@@ -305,12 +329,15 @@ class ExtractionRunner:
         data_dir = output_dir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         results = self.results
+        self.status = "Running..."
+        self._report_progress()
 
         with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
             page = PageCapture(sb, runtime_cfg)
             for i, url in enumerate(urls):
                 if self.cancelled:
                     break
+                self.status = f"Processing {url}"
                 row = {"url": url, "status": "waiting"}
                 try:
                     if not is_valid_url(url):
@@ -326,10 +353,15 @@ class ExtractionRunner:
                 except Exception as exc:
                     row = {"url": url, "status": f"error: {exc}"}
                 results.append(row)
+                self.progress_done += 1
+                self._report_progress()
                 time.sleep(random.uniform(
                     runtime_cfg["timing"]["inter_page_delay_min"],
                     runtime_cfg["timing"]["inter_page_delay_max"],
                 ))
+
+        self.status = "done"
+        self._report_progress()
 
         csv_path = data_dir / "extraction_results.csv"
         write_results_csv(results, csv_path)
@@ -358,13 +390,14 @@ class UnifiedRunner:
 
     _thread: Optional[threading.Thread]
 
-    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path, seo_fields: list[dict] | None = None, generate_pdf: bool = False):
+    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path, seo_fields: list[dict] | None = None, generate_pdf: bool = False, progress_callback: Callable[[int, int, str], None] | None = None):
         self.urls = urls
         self.collectors = collectors
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.seo_fields = seo_fields
         self.generate_pdf = generate_pdf
+        self.progress_callback = progress_callback
         self.results = {"screenshot": [], "seo": [], "extraction": []}
         self.cancelled = False
         self._thread = None
@@ -374,6 +407,8 @@ class UnifiedRunner:
 
     def _bump_progress(self, n: int = 1) -> None:
         self.progress_done += n
+        if self.progress_callback:
+            self.progress_callback(self.progress_done, self.progress_total, self.status)
 
     def run(self):
         self.results = {"screenshot": [], "seo": [], "extraction": []}
@@ -651,17 +686,23 @@ class FastRunnerLegacy:
         runtime_cfg: dict,
         output_dir: Path,
         seo_fields: list[dict] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ):
         self.urls = urls
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.seo_fields = seo_fields
+        self.progress_callback = progress_callback
         self.results: dict[str, list[dict]] = {"seo": []}
         self.cancelled = False
         self._thread = None
         self.status = "queued"
         self.progress_total = len(urls)
         self.progress_done = 0
+
+    def _report_progress(self) -> None:
+        if self.progress_callback:
+            self.progress_callback(self.progress_done, self.progress_total, self.status)
 
     def _refresh_session(self, seed_url: str) -> dict:
         """Open a browser, solve Turnstile, and return a fresh session dict.
@@ -708,6 +749,7 @@ class FastRunnerLegacy:
         self.results = {"seo": []}
         self.progress_done = 0
         self.status = "Starting browser..."
+        self._report_progress()
 
         output_dir = self.output_dir
         data_dir = output_dir / "data"
@@ -720,8 +762,10 @@ class FastRunnerLegacy:
 
         # Step 2: crawl all URLs concurrently with curl_cffi
         self.status = f"Crawling {len(self.urls)} URLs..."
+        self._report_progress()
         items = self._crawl_batch(self.urls, cookies_dict, user_agent)
         self.progress_done = min(len(items), self.progress_total)
+        self._report_progress()
 
         # Step 3: retry anything that was blocked with a fresh Turnstile session
         max_retries = 3
@@ -733,6 +777,7 @@ class FastRunnerLegacy:
             if not blocked or self.cancelled:
                 break
             self.status = f"Retrying {len(blocked)} blocked URLs (attempt {attempt + 1}/{max_retries})..."
+            self._report_progress()
             fresh = self._refresh_session(blocked[0]["url"])
             if not fresh.get("cookies"):
                 break
@@ -746,10 +791,12 @@ class FastRunnerLegacy:
                     it.clear()
                     it.update(by_url[u])
             self.progress_done = min(len(items), self.progress_total)
+            self._report_progress()
 
         self.results["seo"] = items
         self.progress_done = self.progress_total
         self.status = "done"
+        self._report_progress()
 
         if items:
             _compute_internal_inlinks(items)
@@ -786,11 +833,13 @@ class Crawl4AIRunner:
         runtime_cfg: dict,
         output_dir: Path,
         seo_fields: list[dict] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ):
         self.urls = urls
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.seo_fields = seo_fields  # kept for compatibility; crawl4ai returns all fields
+        self.progress_callback = progress_callback
         self.results: dict[str, list[dict]] = {"seo": []}
         self.cancelled = False
         self._thread = None
@@ -892,6 +941,10 @@ class Crawl4AIRunner:
             "jsonld_full": md.get("jsonld_full", ""),
         }
 
+    def _report_progress(self) -> None:
+        if self.progress_callback:
+            self.progress_callback(self.progress_done, self.progress_total, self.status)
+
     def run(self):
         import asyncio
 
@@ -900,6 +953,7 @@ class Crawl4AIRunner:
         self.results = {"seo": []}
         self.progress_done = 0
         self.status = "Starting Crawl4AI..."
+        self._report_progress()
 
         output_dir = self.output_dir
         data_dir = output_dir / "data"
@@ -951,6 +1005,7 @@ class Crawl4AIRunner:
                         # Navigation errors (e.g., ERR_ABORTED) throw instead of returning failed results
                         # Create failed results for all URLs so they get retried
                         self.status = f"Navigation error: {e}, will retry..."
+                        self._report_progress()
                         items = []
                         for url in urls:
                             if self.cancelled:
@@ -978,6 +1033,7 @@ class Crawl4AIRunner:
                             break
                         self.progress_done = i + 1
                         self.status = f"Processing {result.url}"
+                        self._report_progress()
                         row = self._transform_result(result)
                         items.append(row)
 
@@ -997,6 +1053,7 @@ class Crawl4AIRunner:
                     if not blocked or self.cancelled:
                         break
                     self.status = f"Retrying {len(blocked)} failed URLs (attempt {attempt + 1}/{max_retries})..."
+                    self._report_progress()
                     retry_urls = [it["url"] for it in blocked]
 
                     retried = await _crawl(retry_urls)
@@ -1008,6 +1065,7 @@ class Crawl4AIRunner:
                             it.clear()
                             it.update(by_url[u])
                     self.progress_done = min(len(items), self.progress_total)
+                    self._report_progress()
 
                 return items
 
@@ -1022,10 +1080,7 @@ class Crawl4AIRunner:
         self.results["seo"] = items
         self.progress_done = self.progress_total
         self.status = "done"
-
-        self.results["seo"] = items
-        self.progress_done = self.progress_total
-        self.status = "done"
+        self._report_progress()
 
         if items:
             _compute_internal_inlinks(items)
