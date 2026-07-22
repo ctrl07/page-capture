@@ -12,7 +12,6 @@ from components.progress import run_with_progress
 from components.results_viewer import render_unified_results
 from extraction import get_standard_seo_fields, render_seo_fields_selector
 from importers import (
-    import_from_csv_file,
     import_from_sitemap_url,
     import_from_wp_xml,
     parse_urls_text,
@@ -150,7 +149,7 @@ def _render_url_source_panel() -> list[str]:
 
     url_source = st.radio(
         "URL source",
-        ["Paste URLs", "Sitemap", "CSV upload", "WordPress XML"],
+        ["Paste URLs", "Sitemap", "WordPress XML"],
         horizontal=True,
         key="newrun_url_source",
         label_visibility="collapsed",
@@ -185,22 +184,6 @@ def _render_url_source_panel() -> list[str]:
                         st.success(f"Found {len(imported_urls)} URLs")
                     except Exception as e:
                         st.error(f"Failed: {e}")
-
-    elif url_source == "CSV upload":
-        uploaded = st.file_uploader(
-            "Upload CSV",
-            type=["csv", "txt"],
-            key="newrun_csv",
-            label_visibility="collapsed",
-        )
-        if uploaded:
-            raw = uploaded.read().decode("utf-8", errors="replace")
-            pairs = import_from_csv_file(raw)
-            if pairs:
-                imported_urls = [a for a, _ in pairs]
-                st.success(f"Found {len(imported_urls)} URLs from CSV")
-            else:
-                st.error("No valid URLs found in CSV")
 
     elif url_source == "WordPress XML":
         uploaded = st.file_uploader(
@@ -237,7 +220,7 @@ def _render_url_source_panel() -> list[str]:
                 st.session_state.capture_urls = []
                 st.rerun()
     elif not imported_urls:
-        st.info("Paste URLs above, or import from a sitemap/CSV/WordPress XML.")
+        st.info("Paste URLs above, or import from a sitemap or WordPress XML.")
 
     return existing_urls
 
