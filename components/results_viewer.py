@@ -27,16 +27,22 @@ def _empty_state(icon: str, title: str, message: str, action_label: str = "", ac
 def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix: str = "") -> None:
     ok_count = sum(1 for r in results if r.get("status") == "ok")
     fail_count = len(results) - ok_count
+    is_screenshot = kind == "screenshot"
 
-    tabs = st.tabs(["Summary", "Details", "Preview"])
+    if is_screenshot:
+        tabs = st.tabs(["Summary", "Details", "URL List", "Preview"])
+        summary_tab, details_tab, url_list_tab, preview_tab = tabs
+    else:
+        tabs = st.tabs(["Summary", "Details", "Preview"])
+        summary_tab, details_tab, preview_tab = tabs
 
-    with tabs[0]:
+    with summary_tab:
         c1, c2, c3 = st.columns(3)
         c1.metric("Total", len(results))
         c2.metric("OK", ok_count)
         c3.metric("Failed", fail_count)
 
-        if kind == "screenshot" and ok_count > 0:
+        if is_screenshot and ok_count > 0:
             st.markdown("---")
             zip_key = f"{key_prefix}zip_data"
             if zip_key not in st.session_state:
@@ -51,8 +57,8 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                 type="primary",
             )
 
-    with tabs[1]:
-        # ── Filters ──
+    if is_screenshot:
+        # ── URL List Tab: filters + dataframe (screenshots only) ──
         filter_key = f"{key_prefix}filter_status"
         search_key = f"{key_prefix}filter_search"
         if filter_key not in st.session_state:
@@ -60,97 +66,70 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
         if search_key not in st.session_state:
             st.session_state[search_key] = ""
 
-        fc1, fc2 = st.columns([1, 3])
-        with fc1:
-            status_filter = st.segmented_control(
-                "Status", ["All", "OK", "Failed"],
-                key=filter_key, label_visibility="collapsed",
-            )
-        with fc2:
-            search = st.text_input(
-                "Search URLs", key=search_key,
-                placeholder="Filter by URL...",
-                label_visibility="collapsed",
-            )
+        with url_list_tab:
+            fc1, fc2 = st.columns([1, 3])
+            with fc1:
+                status_filter = st.segmented_control(
+                    "Status", ["All", "OK", "Failed"],
+                    key=filter_key, label_visibility="collapsed",
+                )
+            with fc2:
+                search = st.text_input(
+                    "Search URLs", key=search_key,
+                    placeholder="Filter by URL...",
+                    label_visibility="collapsed",
+                )
 
-        # ── Apply filters ──
-        filtered = results
-        if status_filter == "OK":
-            filtered = [r for r in filtered if r.get("status") == "ok"]
-        elif status_filter == "Failed":
-            filtered = [r for r in filtered if r.get("status") != "ok"]
-        if search.strip():
-            q = search.strip().lower()
-            filtered = [r for r in filtered if q in r.get("url", "").lower()]
+            filtered_screenshots = results
+            if status_filter == "OK":
+                filtered_screenshots = [r for r in filtered_screenshots if r.get("status") == "ok"]
+            elif status_filter == "Failed":
+                filtered_screenshots = [r for r in filtered_screenshots if r.get("status") != "ok"]
+            if search.strip():
+                q = search.strip().lower()
+                filtered_screenshots = [r for r in filtered_screenshots if q in r.get("url", "").lower()]
 
-        if not filtered:
-            _empty_state(
-                "🔍",
-                "No results match",
-                f"Try adjusting your filters or search.\n\n**Current filters:** Status: {status_filter}, Search: '{search}'",
-            )
-        else:
-            df = pd.DataFrame(filtered)
-            hide_cols = {"png", "pdf", "file"}
-            dcols = [c for c in df.columns if c not in hide_cols]
-            display_df = df[dcols] if dcols else df
+            if not filtered_screenshots:
+                _empty_state(
+                    "🔍",
+                    "No results match",
+                    f"Try adjusting your filters or search.\n\n**Current filters:** Status: {status_filter}, Search: '{search}'",
+                )
+            else:
+                df = pd.DataFrame(filtered_screenshots)
+                hide_cols = {"png", "pdf", "file"}
+                dcols = [c for c in df.columns if c not in hide_cols]
+                display_df = df[dcols] if dcols else df
 
-            col_cfg: dict = {}
-            if "url" in display_df.columns:
-                col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True, width="large")
-            if "status" in display_df.columns:
-                col_cfg["status"] = st.column_config.TextColumn("Status", width="small")
+                col_cfg: dict = {}
+                if "url" in display_df.columns:
+                    col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True, width="large")
+                if "status" in display_df.columns:
+                    col_cfg["status"] = st.column_config.TextColumn("Status", width="small")
 
-            event = st.dataframe(
-                display_df, width="stretch", hide_index=True,
-                column_config=col_cfg or None,
-                on_select="rerun", selection_mode="single-row",
-                key=f"{key_prefix}df",
-            )
+                event = st.dataframe(
+                    display_df, width="stretch", hide_index=True,
+                    column_config=col_cfg or None,
+                    on_select="rerun", selection_mode="single-row",
+                    key=f"{key_prefix}df",
+                )
 
-            sel_rows = getattr(event, "selection", None)
-            sel_rows = getattr(sel_rows, "rows", []) if sel_rows else []
-            if sel_rows:
-                idx = sel_rows[0]
-                row = filtered[idx]
+                sel_rows = getattr(event, "selection", None)
+                sel_rows = getattr(sel_rows, "rows", []) if sel_rows else []
+                if sel_rows:
+                    idx = sel_rows[0]
+                    st.session_state[f"{key_prefix}selected_idx"] = filtered_screenshots[idx].get("_orig_idx", idx)
+                    st.session_state[f"{key_prefix}selected_row"] = filtered_screenshots[idx]
+                else:
+                    st.session_state.pop(f"{key_prefix}selected_idx", None)
+                    st.session_state.pop(f"{key_prefix}selected_row", None)
+
+                # Download filtered ZIP
                 st.markdown("---")
-                st.markdown(f"**{row.get('url', '')}**")
-
-                with st.expander("Details", expanded=True):
-                    for k, v in row.items():
-                        if k in ("png", "pdf", "file"):
-                            continue
-                        if isinstance(v, (dict, list)):
-                            st.json(v)
-                        else:
-                            st.text(f"{k}: {v}")
-
-                notes_key = f"{key_prefix}notes_{idx}"
-                notes_val = st.session_state.get(notes_key, "")
-                st.text_area("Notes", value=notes_val, key=notes_key, height=80)
-
-                if kind == "screenshot":
-                    png_path = Path(row.get("file", ""))
-                    if png_path.is_file():
-                        st.image(str(png_path), width="stretch")
-                    pdf_path = Path(row.get("pdf", ""))
-                    if pdf_path.is_file():
-                        with open(pdf_path, "rb") as f:
-                            st.download_button(
-                                "Download PDF", data=f,
-                                file_name=pdf_path.name, mime="application/pdf",
-                                key=f"{key_prefix}preview_pdf_{idx}",
-                                width="stretch",
-                            )
-
-            # Download buttons for filtered results
-            st.markdown("---")
-            dl_cols = st.columns(3)
-            if kind == "screenshot" and filtered:
-                with dl_cols[0]:
+                if filtered_screenshots:
                     zip_key = f"{key_prefix}zip_data_filtered"
                     if zip_key not in st.session_state:
-                        st.session_state[zip_key] = build_zip(filtered, output_dir)
+                        st.session_state[zip_key] = build_zip(filtered_screenshots, output_dir)
                     st.download_button(
                         "Download Filtered (ZIP)",
                         data=st.session_state[zip_key],
@@ -159,24 +138,47 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                         key=f"{key_prefix}dl_zip_filtered",
                         width="stretch",
                     )
-            if kind in ("seo", "extraction") and filtered:
-                with dl_cols[1]:
-                    all_keys = list(dict.fromkeys(k for r in filtered for k in r))
-                    csv_buf = io.StringIO()
-                    writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
-                    writer.writeheader()
-                    writer.writerows(filtered)
-                    st.download_button(
-                        "Download Filtered (CSV)",
-                        data=csv_buf.getvalue().encode(),
-                        file_name=f"{kind}_results_filtered.csv",
-                        mime="text/csv",
-                        key=f"{key_prefix}dl_csv_filtered",
-                        width="stretch",
-                    )
 
-    with tabs[2]:
-        if kind == "screenshot":
+        # ── Details Tab: selected item info (screenshots) ──
+        with details_tab:
+            selected_row = st.session_state.get(f"{key_prefix}selected_row")
+            if selected_row:
+                st.markdown(f"**{selected_row.get('url', '')}**")
+                with st.expander("Details", expanded=True):
+                    for k, v in selected_row.items():
+                        if k in ("png", "pdf", "file", "_orig_idx"):
+                            continue
+                        if isinstance(v, (dict, list)):
+                            st.json(v)
+                        else:
+                            st.text(f"{k}: {v}")
+
+                sel_idx = st.session_state.get(f"{key_prefix}selected_idx", 0)
+                notes_key = f"{key_prefix}notes_{sel_idx}"
+                notes_val = st.session_state.get(notes_key, "")
+                st.text_area("Notes", value=notes_val, key=notes_key, height=80)
+
+                png_path = Path(selected_row.get("file", ""))
+                if png_path.is_file():
+                    st.image(str(png_path), width="stretch")
+                pdf_path = Path(selected_row.get("pdf", ""))
+                if pdf_path.is_file():
+                    with open(pdf_path, "rb") as f:
+                        st.download_button(
+                            "Download PDF", data=f,
+                            file_name=pdf_path.name, mime="application/pdf",
+                            key=f"{key_prefix}preview_pdf_{sel_idx}",
+                            width="stretch",
+                        )
+            else:
+                _empty_state(
+                    "👆",
+                    "No item selected",
+                    "Select a row from the **URL List** tab to view details here.",
+                )
+
+        # ── Preview Tab: image gallery (screenshots only) ──
+        with preview_tab:
             indexed = [
                 (r.get("file", ""), i)
                 for i, r in enumerate(results)
@@ -217,7 +219,103 @@ def render_results(results: list[dict], kind: str, output_dir: Path, key_prefix:
                                     mime="application/pdf", key=f"{key_prefix}preview_pdf_dl",
                                     width="stretch",
                                 )
-        else:
+
+    else:
+        # ── Non-screenshot: Details Tab (filters + dataframe + item detail) ──
+        filter_key = f"{key_prefix}filter_status"
+        search_key = f"{key_prefix}filter_search"
+        if filter_key not in st.session_state:
+            st.session_state[filter_key] = "All"
+        if search_key not in st.session_state:
+            st.session_state[search_key] = ""
+
+        with details_tab:
+            fc1, fc2 = st.columns([1, 3])
+            with fc1:
+                status_filter = st.segmented_control(
+                    "Status", ["All", "OK", "Failed"],
+                    key=filter_key, label_visibility="collapsed",
+                )
+            with fc2:
+                search = st.text_input(
+                    "Search URLs", key=search_key,
+                    placeholder="Filter by URL...",
+                    label_visibility="collapsed",
+                )
+
+            filtered = results
+            if status_filter == "OK":
+                filtered = [r for r in filtered if r.get("status") == "ok"]
+            elif status_filter == "Failed":
+                filtered = [r for r in filtered if r.get("status") != "ok"]
+            if search.strip():
+                q = search.strip().lower()
+                filtered = [r for r in filtered if q in r.get("url", "").lower()]
+
+            if not filtered:
+                _empty_state(
+                    "🔍",
+                    "No results match",
+                    f"Try adjusting your filters or search.\n\n**Current filters:** Status: {status_filter}, Search: '{search}'",
+                )
+            else:
+                df = pd.DataFrame(filtered)
+                hide_cols = {"png", "pdf", "file"}
+                dcols = [c for c in df.columns if c not in hide_cols]
+                display_df = df[dcols] if dcols else df
+
+                col_cfg: dict = {}
+                if "url" in display_df.columns:
+                    col_cfg["url"] = st.column_config.LinkColumn("URL", pinned=True, width="large")
+                if "status" in display_df.columns:
+                    col_cfg["status"] = st.column_config.TextColumn("Status", width="small")
+
+                event = st.dataframe(
+                    display_df, width="stretch", hide_index=True,
+                    column_config=col_cfg or None,
+                    on_select="rerun", selection_mode="single-row",
+                    key=f"{key_prefix}df",
+                )
+
+                sel_rows = getattr(event, "selection", None)
+                sel_rows = getattr(sel_rows, "rows", []) if sel_rows else []
+                if sel_rows:
+                    idx = sel_rows[0]
+                    row = filtered[idx]
+                    st.markdown("---")
+                    st.markdown(f"**{row.get('url', '')}**")
+
+                    with st.expander("Details", expanded=True):
+                        for k, v in row.items():
+                            if k in ("png", "pdf", "file"):
+                                continue
+                            if isinstance(v, (dict, list)):
+                                st.json(v)
+                            else:
+                                st.text(f"{k}: {v}")
+
+                    notes_key = f"{key_prefix}notes_{idx}"
+                    notes_val = st.session_state.get(notes_key, "")
+                    st.text_area("Notes", value=notes_val, key=notes_key, height=80)
+
+                # Download buttons for filtered results
+                st.markdown("---")
+                if filtered:
+                    all_keys = list(dict.fromkeys(k for r in filtered for k in r))
+                    csv_buf = io.StringIO()
+                    writer = csv.DictWriter(csv_buf, fieldnames=all_keys, extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(filtered)
+                    st.download_button(
+                        "Download Filtered (CSV)",
+                        data=csv_buf.getvalue().encode(),
+                        file_name=f"{kind}_results_filtered.csv",
+                        mime="text/csv",
+                        key=f"{key_prefix}dl_csv_filtered",
+                        width="stretch",
+                    )
+
+        with preview_tab:
             _empty_state(
                 "📊",
                 "Preview not available",
