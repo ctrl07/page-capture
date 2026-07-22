@@ -834,6 +834,7 @@ class Crawl4AIRunner:
         output_dir: Path,
         seo_fields: list[dict] | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        crawl_config: dict | None = None,
     ):
         self.urls = urls
         self.runtime_cfg = runtime_cfg
@@ -846,10 +847,12 @@ class Crawl4AIRunner:
         self.status = "queued"
         self.progress_total = len(urls)
         self.progress_done = 0
+        self.crawl_config = crawl_config or {}
 
     def _crawl4ai_config(self) -> dict:
         """Build Crawl4AI configuration from runtime config and crawl4ai.yaml."""
         c4ai = self.runtime_cfg.get("crawl4ai", {})
+        cc = self.crawl_config
         return {
             "rate_limit": (c4ai.get("rate_limit_rps", 10), c4ai.get("rate_limit_burst", 1)),
             "timeout": c4ai.get("timeout", 30),
@@ -867,6 +870,15 @@ class Crawl4AIRunner:
             "mean_delay": c4ai.get("mean_delay", 1.0),
             "max_range": c4ai.get("max_range", 2.0),
             "navigation_timeout": c4ai.get("navigation_timeout", 60000),
+            # Step 1: Core crawl configuration
+            "max_depth": cc.get("max_depth", c4ai.get("max_depth", 0)),
+            "max_pages": cc.get("max_pages", c4ai.get("max_pages", 1000)),
+            "include_patterns": cc.get("include_patterns", c4ai.get("include_patterns", [])),
+            "exclude_patterns": cc.get("exclude_patterns", c4ai.get("exclude_patterns", [])),
+            "strip_query_params": cc.get("strip_query_params", c4ai.get("strip_query_params", False)),
+            "respect_robots_txt": cc.get("respect_robots_txt", c4ai.get("respect_robots_txt", False)),
+            "allowed_domains": cc.get("allowed_domains", c4ai.get("allowed_domains", [])),
+            "blocked_domains": cc.get("blocked_domains", c4ai.get("blocked_domains", [])),
         }
 
     def _transform_result(self, result) -> dict:
@@ -898,6 +910,12 @@ class Crawl4AIRunner:
         success = getattr(result, "success", False)
         error_msg = getattr(result, "error_message", None) or "unknown"
         status_code = getattr(result, "status_code", 0) or 0
+        depth = getattr(result, "depth", 0) or md.get("depth", 0)
+        redirect_chain = md.get("redirect_chain", []) or []
+
+        # Compute page size from response body or metadata
+        page_size = md.get("page_size", 0) or 0
+        response_time = md.get("response_time", 0) or 0
 
         return {
             "url": url,
@@ -920,7 +938,6 @@ class Crawl4AIRunner:
             "og_site_name": md.get("og_site_name", ""),
             "og_locale": md.get("og_locale", ""),
             "twitter_card": md.get("twitter_card", ""),
-            "twitter_title": md.get("twitter_title", ""),
             "twitter_description": md.get("twitter_description", ""),
             "twitter_image": md.get("twitter_image", ""),
             "twitter_site": md.get("twitter_site", ""),
@@ -939,6 +956,11 @@ class Crawl4AIRunner:
             "meta_charset": md.get("meta_charset", ""),
             "hreflang": md.get("hreflang", ""),
             "jsonld_full": md.get("jsonld_full", ""),
+            # Step 1: Core crawl fields
+            "depth": depth,
+            "redirect_chain": " -> ".join(redirect_chain) if redirect_chain else "",
+            "page_size": page_size,
+            "response_time": response_time,
         }
 
     def _report_progress(self) -> None:
@@ -949,6 +971,12 @@ class Crawl4AIRunner:
         import asyncio
 
         from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
+        from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
+        from crawl4ai.deep_crawling.filters import (
+            DomainFilter,
+            FilterChain,
+            URLPatternFilter,
+        )
 
         self.results = {"seo": []}
         self.progress_done = 0
@@ -973,28 +1001,22 @@ class Crawl4AIRunner:
             user_agent_mode=cfg.get("user_agent_mode", "random"),
             remove_overlay_elements=cfg.get("remove_overlay_elements", True),
             remove_consent_popups=cfg.get("remove_consent_popups", True),
+            check_robots_txt=cfg.get("respect_robots_txt", False),
         )
 
-        async def _run_all():
-            # Single crawler instance reused across all retries for cookie/session persistence
-            async with AsyncWebCrawler(
-                headless=cfg["headless"],
-                verbose=False,
-                viewport_width=cfg["viewport_width"],
-                viewport_height=cfg["viewport_height"],
-                user_agent=cfg["user_agent"],
-                rate_limit=cfg["rate_limit"],
-                simulate_user=cfg.get("simulate_user", True),
-                magic=cfg.get("magic", True),
-                override_navigator=cfg.get("override_navigator", True),
-                user_agent_mode=cfg.get("user_agent_mode", "random"),
-                remove_overlay_elements=cfg.get("remove_overlay_elements", True),
-                remove_consent_popups=cfg.get("remove_consent_popups", True),
-                proxy_config=cfg.get("proxy"),
-            ) as crawler:
+        max_depth = cfg.get("max_depth", 0)
+        max_pages = cfg.get("max_pages", 1000)
+        include_patterns: list[str] = cfg.get("include_patterns", [])
+        exclude_patterns: list[str] = cfg.get("exclude_patterns", [])
+        allowed_domains: list[str] = cfg.get("allowed_domains", [])
+        blocked_domains: list[str] = cfg.get("blocked_domains", [])
+        strip_query_params = cfg.get("strip_query_params", False)
 
+        async def _run_all():
+            # ---- Batch crawl (max_depth=0): crawl exact URLs list ----
+
+            async def _batch_crawl(crawler):
                 async def _crawl(urls: list[str]):
-                    """Crawl a list of URLs, returning results for each."""
                     try:
                         results = await crawler.arun_many(
                             urls,
@@ -1002,8 +1024,6 @@ class Crawl4AIRunner:
                             max_concurrent=cfg["rate_limit"][0] if isinstance(cfg["rate_limit"], tuple) else 8,
                         )
                     except Exception as e:
-                        # Navigation errors (e.g., ERR_ABORTED) throw instead of returning failed results
-                        # Create failed results for all URLs so they get retried
                         self.status = f"Navigation error: {e}, will retry..."
                         self._report_progress()
                         items = []
@@ -1017,15 +1037,13 @@ class Crawl4AIRunner:
                             })
                         return items
 
-                    # arun_many returns list in 0.9.x, async generator in older versions
                     if hasattr(results, "__aiter__"):
                         results_list = []
                         async for r in results:
                             results_list.append(r)
                         results = results_list
 
-                    # Type guard: results is now a list
-                    results = list(results)  # type: ignore[assignment]
+                    results = list(results)
 
                     items = []
                     for i, result in enumerate(results):
@@ -1039,11 +1057,8 @@ class Crawl4AIRunner:
 
                     return items
 
-                # Initial crawl
                 items = await _crawl(self.urls)
 
-                # Retry failed/blocked (status != ok, non-200, empty content, or nav errors)
-                # Uses SAME crawler instance so cookies/session persist across retries
                 max_retries = 3
                 for attempt in range(max_retries):
                     blocked = [
@@ -1068,6 +1083,127 @@ class Crawl4AIRunner:
                     self._report_progress()
 
                 return items
+
+            # ---- Deep crawl (max_depth>0): BFS link following ----
+
+            async def _deep_crawl(crawler):
+                filters: list = []
+
+                if include_patterns or exclude_patterns:
+                    url_filter = URLPatternFilter(
+                        patterns=[*include_patterns, *[f"!{p}" for p in exclude_patterns]],
+                        use_glob=False,
+                    )
+                    filters.append(url_filter)
+
+                if allowed_domains:
+                    domain_filter = DomainFilter(allowed_domains=allowed_domains)
+                    filters.append(domain_filter)
+                if blocked_domains:
+                    domain_filter = DomainFilter(blocked_domains=blocked_domains)
+                    filters.append(domain_filter)
+
+                filter_chain = FilterChain(filters=filters) if filters else None
+
+                if not allowed_domains and not blocked_domains:
+                    from urllib.parse import urlparse
+                    seed_domains: list[str] = [h for h in {urlparse(u).hostname for u in self.urls} if h is not None]
+                    if seed_domains:
+                        domain_filter = DomainFilter(allowed_domains=seed_domains)
+                        filter_chain = FilterChain(filters=[domain_filter])
+
+                def _should_cancel():
+                    return self.cancelled
+
+                strategy = BFSDeepCrawlStrategy(
+                    max_depth=max_depth,
+                    filter_chain=filter_chain or FilterChain(filters=[]),
+                    max_pages=max_pages,
+                    should_cancel=_should_cancel,
+                )
+
+                crawl_cfg = CrawlerRunConfig(
+                    cache_mode=CacheMode.BYPASS,
+                    wait_until=cfg["wait_until"],
+                    wait_for_timeout=cfg["wait_for_timeout"],
+                    page_timeout=cfg["timeout"] * 1000,
+                    session_id=cfg.get("session_id") or "persistent_session",
+                    mean_delay=cfg.get("mean_delay", 1.0),
+                    max_range=cfg.get("max_range", 2.0),
+                    override_navigator=cfg.get("override_navigator", True),
+                    user_agent_mode=cfg.get("user_agent_mode", "random"),
+                    remove_overlay_elements=cfg.get("remove_overlay_elements", True),
+                    remove_consent_popups=cfg.get("remove_consent_popups", True),
+                    check_robots_txt=cfg.get("respect_robots_txt", False),
+                    deep_crawl_strategy=strategy,
+                )
+
+                seen_urls: set[str] = set()
+                all_items: list[dict] = []
+
+                def _normalize_url(url: str) -> str:
+                    if strip_query_params:
+                        from urllib.parse import urlparse, urlunparse
+                        parsed = urlparse(url)
+                        return urlunparse(parsed._replace(query=""))
+                    return url
+
+                async def _crawl_seed(url: str) -> None:
+                    container = await crawler.arun(url, config=crawl_cfg)
+                    results_list: list = []
+                    if hasattr(container, "__aiter__"):
+                        async for r in container:
+                            results_list.append(r)
+                    elif hasattr(container, "__iter__"):
+                        results_list = list(container)
+                    else:
+                        results_list = [container]
+
+                    for result in results_list:
+                        if self.cancelled:
+                            break
+                        u = getattr(result, "url", "")
+                        normalized = _normalize_url(u)
+                        if normalized and normalized not in seen_urls:
+                            seen_urls.add(normalized)
+                            row = self._transform_result(result)
+                            row["depth"] = max_depth
+                            all_items.append(row)
+                            self.progress_done = len(all_items)
+                            self.status = f"Crawled {u}"
+                            self._report_progress()
+
+                for seed_url in self.urls:
+                    if self.cancelled:
+                        break
+                    self.status = f"Deep crawling from {seed_url}..."
+                    self._report_progress()
+                    await _crawl_seed(seed_url)
+
+                self.progress_total = max(len(all_items), self.progress_total)
+                return all_items
+
+            # ---- Crawler execution ----
+
+            async with AsyncWebCrawler(
+                headless=cfg["headless"],
+                verbose=False,
+                viewport_width=cfg["viewport_width"],
+                viewport_height=cfg["viewport_height"],
+                user_agent=cfg["user_agent"],
+                rate_limit=cfg["rate_limit"],
+                simulate_user=cfg.get("simulate_user", True),
+                magic=cfg.get("magic", True),
+                override_navigator=cfg.get("override_navigator", True),
+                user_agent_mode=cfg.get("user_agent_mode", "random"),
+                remove_overlay_elements=cfg.get("remove_overlay_elements", True),
+                remove_consent_popups=cfg.get("remove_consent_popups", True),
+                proxy_config=cfg.get("proxy"),
+            ) as crawler:
+                if max_depth > 0:
+                    return await _deep_crawl(crawler)
+                else:
+                    return await _batch_crawl(crawler)
 
         # Run async crawl in background thread
         loop = asyncio.new_event_loop()

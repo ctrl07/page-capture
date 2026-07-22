@@ -187,3 +187,13 @@ crawl4ai:
   headless: true
   viewport_width: 1920
   viewport_height: 1080
+
+  # === Step 1: Core Crawl Configuration ===
+  max_depth: 0                # 0 = initial URLs only, 1+ = follow links up to N hops
+  max_pages: 1000             # Maximum total pages to crawl (safety limit)
+  include_patterns: []        # Only crawl URLs matching these regex patterns (empty = all)
+  exclude_patterns: []        # Skip URLs matching these regex patterns
+  strip_query_params: false   # Strip query parameters before dedup/crawling
+  respect_robots_txt: false   # Check and respect robots.txt rules
+  allowed_domains: []         # Only crawl URLs within these domains (empty = derive from seed)
+  blocked_domains: []         # Skip URLs from these domains
