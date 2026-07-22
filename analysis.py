@@ -56,6 +56,9 @@ HOW_TO_FIX: dict[str, str] = {
     "orphan_page": "This page has zero internal inlinks. Add links from other pages to it.",
     "hreflang_invalid_code": "Fix invalid hreflang language codes -- use valid ISO 639-1 codes.",
     "hreflang_missing_x_default": "Add an hreflang x-default tag for the fallback language version.",
+    "hreflang_mismatch": "Ensure all hreflang entries reference the same set of languages across linked pages.",
+    "broken_links_found": "Fix broken links (4xx/5xx) pointing from your pages to improve user experience.",
+    "canonical_chain_too_long": "Shorten canonical redirect chains to avoid SEO dilution.",
 }
 
 
@@ -386,6 +389,25 @@ def analyze_results(results: list[dict]) -> list[Issue]:
         if invalid_urls:
             issues.append(Issue("hreflang", "warning", "hreflang_invalid_code", invalid_urls))
 
+        # hreflang consistency: build language sets per URL and flag mismatches
+        hreflang_sets: dict[str, set[str]] = {}
+        for r in ok:
+            hl = r.get("hreflang", "")
+            if not hl:
+                continue
+            langs = set()
+            for entry in str(hl).split("|"):
+                code = entry.strip().split(":")[0].strip().lower()
+                if code:
+                    langs.add(code)
+            if langs:
+                hreflang_sets[r.get("url", "")] = langs
+        if hreflang_sets:
+            ref_set = next(iter(hreflang_sets.values()))
+            mismatched = [url for url, langs in hreflang_sets.items() if langs != ref_set]
+            if mismatched and len(mismatched) > 1:
+                issues.append(Issue("hreflang", "warning", "hreflang_mismatch", mismatched))
+
     # ── Links ──
     urls = [
         r.get("url", "") for r in ok
@@ -393,6 +415,24 @@ def analyze_results(results: list[dict]) -> list[Issue]:
     ]
     if urls:
         issues.append(Issue("links", "opportunity", "orphan_page", urls))
+
+    # Broken links (populated during crawl via _analyze_broken_links)
+    broken = [r for r in ok if r.get("broken_links")]
+    if broken:
+        urls_broken = []
+        for r in broken:
+            for bl in r.get("broken_links", []):
+                urls_broken.append(f"{r.get('url', '')} -> {bl.get('target_url', '')} ({bl.get('status_code', '?')})")
+        if urls_broken:
+            issues.append(Issue("links", "warning", "broken_links_found", urls_broken))
+
+    # Canonical chain length check
+    long_chains = [
+        r.get("url", "") for r in ok
+        if r.get("canonical_chain") and len(str(r["canonical_chain"]).split(" -> ")) > 2
+    ]
+    if long_chains:
+        issues.append(Issue("canonical", "warning", "canonical_chain_too_long", long_chains))
 
     # Sort: errors first, then warnings, then opportunities
     severity_order = {"error": 0, "warning": 1, "opportunity": 2}

@@ -100,15 +100,123 @@ def build_runtime_config(CONFIG: dict, viewport: dict, stabilization_ms: int) ->
 
 
 def _compute_internal_inlinks(results: list[dict]) -> None:
-    """Placeholder for internal inlink computation.
+    """Compute internal inlink counts by building a link graph from stored link details.
 
-    Currently a no-op — sets internal_inlinks to 0 for all rows.
-    A future enhancement could collect individual outlink URLs during crawl
-    to build a proper link graph.
+    Each result row should have internal_links_detail containing {href, text, rel}
+    for every outbound internal link found on that page. This function inverts
+    that mapping to count how many pages link TO each URL.
     """
+    from urllib.parse import urlparse, urlunparse
+
+    inlink_map: dict[str, set[str]] = {}
+
+    def _normalize(u: str) -> str:
+        parsed = urlparse(u)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+
     for row in results:
-        if row.get("status") == "ok":
-            row["internal_inlinks"] = row.get("internal_inlinks", 0)
+        if row.get("status") != "ok":
+            continue
+        source_url = _normalize(row.get("url", ""))
+        if not source_url:
+            continue
+        for link in row.get("internal_links_detail", []):
+            target = _normalize(link.get("href", ""))
+            if target and target != source_url:
+                inlink_map.setdefault(target, set()).add(source_url)
+
+    for row in results:
+        url = _normalize(row.get("url", ""))
+        if url and url in inlink_map:
+            row["internal_inlinks"] = len(inlink_map[url])
+        else:
+            row["internal_inlinks"] = 0
+
+
+def _analyze_broken_links(results: list[dict]) -> list[dict]:
+    """Scan all outlinks found during crawl and check for 4xx/5xx responses.
+
+    Returns a list of broken link entries: {source_url, target_url, status_code}.
+    """
+    import requests
+
+    all_outlinks: set[str] = set()
+    source_map: dict[str, set[str]] = {}
+    for row in results:
+        src = row.get("url", "")
+        if not src:
+            continue
+        for link in row.get("internal_links_detail", []):
+            href = link.get("href", "")
+            if href and href.startswith("http"):
+                all_outlinks.add(href)
+                source_map.setdefault(href, set()).add(src)
+        for link in row.get("external_links_detail", []):
+            href = link.get("href", "")
+            if href and href.startswith("http"):
+                all_outlinks.add(href)
+                source_map.setdefault(href, set()).add(src)
+
+    broken: list[dict] = []
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0 PageCapture/1.0 broken-link-check"})
+    for href in all_outlinks:
+        try:
+            resp = session.head(href, timeout=10, allow_redirects=True)
+            if resp.status_code >= 400:
+                for src_url in source_map.get(href, set()):
+                    broken.append({
+                        "source_url": src_url,
+                        "target_url": href,
+                        "status_code": resp.status_code,
+                    })
+        except requests.RequestException:
+            for src_url in source_map.get(href, set()):
+                broken.append({
+                    "source_url": src_url,
+                    "target_url": href,
+                    "status_code": 0,
+                })
+
+    session.close()
+    return broken
+
+
+def _resolve_canonical_chains(results: list[dict]) -> None:
+    """Follow canonical chains to their final destination for each result row."""
+    import requests
+
+    url_map = {r.get("url", ""): r for r in results if r.get("url")}
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0 PageCapture/1.0 canonical-resolver"})
+    for row in results:
+        canon = row.get("canonical", "")
+        if not canon or canon == row.get("url"):
+            continue
+        chain = [canon]
+        visited: set[str] = set()
+        current = canon
+        while current and current not in visited:
+            visited.add(current)
+            if current in url_map:
+                next_canon = url_map[current].get("canonical", "")
+                if next_canon and next_canon != current:
+                    chain.append(next_canon)
+                    current = next_canon
+                else:
+                    break
+            else:
+                try:
+                    resp = session.head(current, timeout=10, allow_redirects=True)
+                    if resp.status_code < 400:
+                        final_url = resp.url
+                        if final_url != current:
+                            chain.append(final_url)
+                    break
+                except requests.RequestException:
+                    break
+        row["canonical_chain"] = " -> ".join(chain)
+    session.close()
 
 
 def build_zip(results: list[dict], output_dir: Path) -> bytes:
@@ -883,7 +991,6 @@ class Crawl4AIRunner:
 
     def _transform_result(self, result) -> dict:
         """Transform Crawl4AI CrawlResult to existing SEO dict format."""
-        # Handle case where result might be None or missing attributes
         if result is None:
             return {
                 "url": "", "status": "error: no result", "status_code": 0,
@@ -898,12 +1005,13 @@ class Crawl4AIRunner:
                 "iframe_count": 0, "form_count": 0, "external_nofollow": 0,
                 "html_lang": "", "meta_viewport": "", "meta_charset": "",
                 "hreflang": "", "jsonld_full": "",
+                "depth": 0, "redirect_chain": "", "page_size": 0, "response_time": 0,
+                "redirected_url": "", "redirected_status_code": None,
+                "canonical_chain": "", "internal_inlinks": 0,
+                "internal_links_detail": [], "external_links_detail": [],
             }
 
         md = result.metadata or {}
-        # Extract internal/external link counts
-        internal = md.get("internal_links", []) or []
-        external = md.get("external_links", []) or []
         schema_types = md.get("schema", []) or []
 
         url = getattr(result, "url", "") or ""
@@ -911,11 +1019,45 @@ class Crawl4AIRunner:
         error_msg = getattr(result, "error_message", None) or "unknown"
         status_code = getattr(result, "status_code", 0) or 0
         depth = getattr(result, "depth", 0) or md.get("depth", 0)
-        redirect_chain = md.get("redirect_chain", []) or []
-
-        # Compute page size from response body or metadata
         page_size = md.get("page_size", 0) or 0
         response_time = md.get("response_time", 0) or 0
+
+        # ── Step 3: Link and Redirect Analysis ──
+
+        redirected_url = getattr(result, "redirected_url", None) or ""
+        redirected_status_code = getattr(result, "redirected_status_code", None)
+
+        # Build redirect chain from redirected_url info
+        redirect_chain = md.get("redirect_chain", []) or []
+        if redirected_url and redirected_url != url:
+            chain_entry = f"{redirected_url} ({redirected_status_code or '?'})"
+            if chain_entry not in redirect_chain:
+                redirect_chain.append(chain_entry)
+
+        # Store individual link details from result.links
+        raw_links = getattr(result, "links", None) or {}
+        internal_links_detail: list[dict] = []
+        external_links_detail: list[dict] = []
+        for entry in raw_links.get("internal", []):
+            if isinstance(entry, dict):
+                internal_links_detail.append({
+                    "href": entry.get("href", ""),
+                    "text": entry.get("text", "") or entry.get("content", ""),
+                    "rel": entry.get("rel", []),
+                })
+        for entry in raw_links.get("external", []):
+            if isinstance(entry, dict):
+                external_links_detail.append({
+                    "href": entry.get("href", ""),
+                    "text": entry.get("text", "") or entry.get("content", ""),
+                    "rel": entry.get("rel", []),
+                })
+
+        # Canonical chain: track resolved chain for canonical URLs
+        canonical_url = md.get("canonical", "")
+        canonical_chain = []
+        if canonical_url and canonical_url != url:
+            canonical_chain.append(canonical_url)
 
         return {
             "url": url,
@@ -925,7 +1067,7 @@ class Crawl4AIRunner:
             "title_len": len(md.get("title", "")),
             "meta_description": md.get("description") or "",
             "meta_desc_len": len(md.get("description") or ""),
-            "canonical": md.get("canonical", ""),
+            "canonical": canonical_url,
             "robots_meta": md.get("robots", ""),
             "h1": md.get("h1", ""),
             "h2s": " | ".join(md.get("h2", [])) if isinstance(md.get("h2"), list) else str(md.get("h2", "")),
@@ -943,8 +1085,10 @@ class Crawl4AIRunner:
             "twitter_site": md.get("twitter_site", ""),
             "schema_types": " | ".join(schema_types) if isinstance(schema_types, list) else str(schema_types),
             "word_count": md.get("word_count", 0),
-            "internal_links": len(internal),
-            "external_links": len(external),
+            "internal_links": len(internal_links_detail),
+            "external_links": len(external_links_detail),
+            "internal_links_detail": internal_links_detail,
+            "external_links_detail": external_links_detail,
             "images_missing_alt": md.get("images_missing_alt", 0),
             "images_total": md.get("images_total", 0),
             "images_no_lazy": md.get("images_no_lazy", 0),
@@ -961,6 +1105,11 @@ class Crawl4AIRunner:
             "redirect_chain": " -> ".join(redirect_chain) if redirect_chain else "",
             "page_size": page_size,
             "response_time": response_time,
+            # Step 3: Link and redirect details
+            "redirected_url": redirected_url,
+            "redirected_status_code": redirected_status_code,
+            "canonical_chain": " -> ".join(canonical_chain) if canonical_chain else "",
+            "internal_inlinks": 0,
         }
 
     def _report_progress(self) -> None:
@@ -1220,6 +1369,15 @@ class Crawl4AIRunner:
 
         if items:
             _compute_internal_inlinks(items)
+            self.status = "Analyzing broken links..."
+            self._report_progress()
+            broken = _analyze_broken_links(items)
+            by_source: dict[str, list[dict]] = {}
+            for entry in broken:
+                by_source.setdefault(entry["source_url"], []).append(entry)
+            for row in items:
+                row["broken_links"] = by_source.get(row.get("url", ""), [])
+            _resolve_canonical_chains(items)
 
         csv_path = data_dir / "seo_results.csv"
         write_results_csv(items, csv_path)
