@@ -334,16 +334,6 @@ def page_blog_audit() -> None:
                 label_visibility="collapsed",
             )
 
-            upload_source = st.file_uploader(
-                "Upload URL list (txt/csv)", type=["txt", "csv"],
-                key="audit_source_upload", label_visibility="collapsed",
-            )
-            if upload_source:
-                content = upload_source.read().decode("utf-8", errors="replace")
-                existing = st.session_state.blog_audit_source_urls.strip()
-                st.session_state.blog_audit_source_urls = (existing + "\n" + content.strip()).strip() if existing else content.strip()
-                st.rerun()
-
     with right:
         with st.container(border=True):
             st.markdown("### Target Site (New CMS)")
@@ -355,16 +345,6 @@ def page_blog_audit() -> None:
                 height=250,
                 label_visibility="collapsed",
             )
-
-            upload_target = st.file_uploader(
-                "Upload URL list (txt/csv)", type=["txt", "csv"],
-                key="audit_target_upload", label_visibility="collapsed",
-            )
-            if upload_target:
-                content = upload_target.read().decode("utf-8", errors="replace")
-                existing = st.session_state.blog_audit_target_urls.strip()
-                st.session_state.blog_audit_target_urls = (existing + "\n" + content.strip()).strip() if existing else content.strip()
-                st.rerun()
 
     st.markdown("---")
     settings_cols = st.columns(4)
