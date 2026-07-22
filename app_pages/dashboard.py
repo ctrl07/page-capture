@@ -58,6 +58,7 @@ def _build_run_table(history: list[dict], search: str, kind_filter: str) -> pd.D
             "seo": "Quick SEO",
             "fast_seo": "Fast SEO",
             "extraction": "Extraction",
+            "blog_audit": "Blog Audit",
         }.get(kind, kind)
 
         total = entry.get("total", 0)
@@ -122,7 +123,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
     by_collector = get_results(entry)
     output_dir = Path(entry.get("output_dir", ""))
     collectors = entry.get("collectors", list(by_collector.keys()))
-    labels = {"screenshot": "Screenshots", "seo": "Quick SEO", "extraction": "Custom Rules"}
+    labels = {"screenshot": "Screenshots", "seo": "Quick SEO", "extraction": "Custom Rules", "blog_audit": "Blog Audit"}
     available = [c for c in collectors if by_collector.get(c)]
 
     st.markdown("---")

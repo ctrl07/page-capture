@@ -1561,3 +1561,591 @@ class Crawl4AIRunner:
             "issues_summary": issues_summary,
             "crawl_config": self.crawl_config,
         })
+
+
+# ── Blog Audit Runner ──────────────────────────────────────────────────────────
+
+
+class BlogAuditRunner:
+    """Compare blog posts between source and target sites using SeleniumBase CDP.
+
+    For each URL pair:
+      1. Load source page, extract blog data via CSS rules
+      2. Load target page, extract blog data via same CSS rules
+      3. Compare fields, score match quality
+      4. Record issues (missing fields, unicode, image localization)
+
+    Uses platform-specific extraction rulesets from rulesets/ directory.
+    Defaults to generic_blog.json if no specific ruleset is provided.
+    """
+
+    _thread: Optional[threading.Thread]
+
+    # Terms to exclude from category/tag extraction (site-wide noise)
+    _TAXONOMY_EXCLUDE_TERMS = frozenset({
+        "uncategorized", "blog", "all posts", "home", "about", "contact",
+        "dealer", "dealership", "inventory", "service", "parts", "hours",
+        "location", "directions", "finance", "specials", "reviews",
+        "privacy", "sitemap", "careers", "testimonials", "team",
+        "new inventory", "used inventory", "schedule service", "financing",
+        "news", "events", "announcements", "press releases",
+    })
+
+    def __init__(
+        self,
+        url_pairs: list[tuple[str, str]],
+        runtime_cfg: dict,
+        output_dir: Path,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+        ruleset_name: str = "generic_blog",
+    ):
+        self.url_pairs = url_pairs
+        self.source_urls = [p[0] for p in url_pairs]
+        self.target_urls = [p[1] for p in url_pairs]
+        self.runtime_cfg = runtime_cfg
+        self.output_dir = output_dir
+        self.progress_callback = progress_callback
+        self.results: dict[str, list[dict]] = {"audit": []}
+        self.cancelled = False
+        self._thread = None
+        self.status = "queued"
+        self.progress_total = len(url_pairs)
+        self.progress_done = 0
+
+        self._rules = []  # loaded at run()
+        self._ruleset_name = ruleset_name
+        self._slug_re = re.compile(r"/([^/]+)/?$")
+
+    def _report_progress(self) -> None:
+        if self.progress_callback:
+            self.progress_callback(self.progress_done, self.progress_total, self.status)
+
+    def _filter_taxonomy(self, items: list[str]) -> list[str]:
+        """Filter categories/tags to exclude site-wide navigation terms and noise."""
+        filtered = []
+        for item in items:
+            text = item.strip()
+            if not text:
+                continue
+            lower = text.lower()
+            if any(term in lower for term in self._TAXONOMY_EXCLUDE_TERMS):
+                continue
+            if "http" in lower or lower.startswith("/"):
+                continue
+            if len(text.split()) > 5:
+                continue
+            filtered.append(text)
+        return filtered
+
+    def _clean_content_html(self, html_str: str) -> str:
+        """Post-process extracted HTML to remove unwanted elements and fix lazy images.
+
+        Mimics the blog-tool's content cleanup pipeline.
+        """
+        if not html_str:
+            return ""
+
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:
+            return html_str
+
+        soup = BeautifulSoup(html_str, "html.parser")
+
+        # Remove scripts, styles, noscript
+        for tag in soup.find_all(["script", "style", "noscript"]):
+            tag.decompose()
+
+        # Remove breadcrumbs
+        for sel in [".breadcrumbs", '.breadcrumb', 'nav[aria-label="Breadcrumb"]',
+                     'nav[aria-label="breadcrumb"]']:
+            for el in soup.select(sel):
+                el.decompose()
+
+        # Remove post navigation (prev/next links)
+        for el in soup.select(".post-navigation, .nav-links, .posts-navigation"):
+            el.decompose()
+
+        # Remove duplicate title/date divs (dealer blog pattern)
+        for el in soup.select(".titleDiv, .dateDiv, .content_title"):
+            el.decompose()
+
+        # Remove social sharing sections
+        for el in soup.select(".sharingIcons, .social-share, .share-buttons, .post-share"):
+            el.decompose()
+
+        # Remove "Posted in" paragraphs
+        for p in soup.find_all("p"):
+            text = p.get_text(strip=True)
+            if text.startswith("Posted in") or "Comments Off" in text or "comment is closed" in text.lower():
+                p.decompose()
+
+        # Remove "Connect with us" headings
+        for heading in soup.find_all(["h2", "h3", "h4"]):
+            if "connect with us" in heading.get_text().lower():
+                heading.decompose()
+
+        # Remove post metadata footer
+        for el in soup.select(".postmetadata, .entry-meta, .post-meta"):
+            el.decompose()
+
+        # Fix lazy-loaded images: replace data-lazy-src, data-src with src
+        for img in soup.find_all("img"):
+            src = str(img.get("src") or "")
+            if src and not src.startswith("data:"):
+                continue
+            for lazy_attr in ("data-lazy-src", "data-src", "data-original", "data-pin-media"):
+                lazy_val = img.get(lazy_attr)
+                if lazy_val:
+                    img["src"] = lazy_val
+                    break
+            # Try srcset if still no good src
+            cur_src = str(img.get("src") or "")
+            if not cur_src or cur_src.startswith("data:"):
+                srcset = img.get("data-lazy-srcset") or img.get("data-srcset") or img.get("srcset")
+                if srcset:
+                    candidates = [c.strip().split() for c in str(srcset).split(",")]
+                    best = max(
+                        (c for c in candidates if len(c) >= 2 and c[1].endswith("w")),
+                        key=lambda c: int(c[1][:-1]),
+                        default=None,
+                    )
+                    if best:
+                        img["src"] = best[0]
+            # Clean up lazy-loading attributes
+            for attr in ("data-lazy-src", "data-src", "data-original", "data-pin-media",
+                         "data-lazy-srcset", "data-srcset", "data-load-done", "data-ssr-src-done"):
+                if attr in img.attrs:
+                    del img[attr]
+
+        result = str(soup)
+        # Clean up double spaces / newlines
+        import re
+        result = re.sub(r"\n\s*\n", "\n", result)
+        return result.strip()
+
+    def _resolve_images_js(self) -> str:
+        """Return a JS snippet that resolves lazy-loaded images in the DOM.
+
+        Injects src from data-lazy-src/data-src/etc so our CSS selectors can
+        find them before extraction runs.
+        """
+        return """
+        (() => {
+            document.querySelectorAll('img').forEach(img => {
+                const src = img.getAttribute('src') || '';
+                if (src && !src.startsWith('data:')) return;
+                for (const attr of ['data-lazy-src', 'data-src', 'data-original', 'data-pin-media']) {
+                    const val = img.getAttribute(attr);
+                    if (val) { img.setAttribute('src', val); break; }
+                }
+                if (!img.getAttribute('src') || img.getAttribute('src').startsWith('data:')) {
+                    const srcset = img.getAttribute('data-lazy-srcset') || img.getAttribute('data-srcset') || img.getAttribute('srcset');
+                    if (srcset) {
+                        let bestUrl = '', bestWidth = -1;
+                        srcset.split(',').forEach(c => {
+                            const parts = c.trim().split(' ');
+                            if (parts.length >= 2 && parts[1].endsWith('w')) {
+                                const w = parseInt(parts[1], 10);
+                                if (w > bestWidth) { bestWidth = w; bestUrl = parts[0]; }
+                            }
+                        });
+                        if (bestUrl) img.setAttribute('src', bestUrl);
+                    }
+                }
+                for (const attr of ['data-lazy-src', 'data-src', 'data-original', 'data-pin-media',
+                                     'data-lazy-srcset', 'data-srcset', 'data-load-done', 'data-ssr-src-done']) {
+                    img.removeAttribute(attr);
+                }
+            });
+        })()
+        """
+
+    def _extract_slug(self, url: str) -> str:
+        m = self._slug_re.search(url.rstrip("/"))
+        return m.group(1) if m else url
+
+    def _extract_blog_data(self, page: PageCapture, url: str) -> dict:
+        from extraction import extract_from_page
+
+        page.open(url)
+        page.scroll()
+        page.sb.sleep(self.runtime_cfg["timing"]["stabilization_ms"] / 1000)
+        page.hide_overlays()
+
+        # Resolve lazy-loaded images in the DOM before extraction
+        page.sb.cdp.evaluate(self._resolve_images_js())
+
+        raw = extract_from_page(page.sb, self._rules)
+        doc_title = (page.sb.cdp.evaluate("document.title") or "").strip()
+        slug = self._extract_slug(url)
+
+        # Post-process content HTML
+        content_html = raw.get("content_html", "")
+        cleaned_html = self._clean_content_html(content_html) if content_html else ""
+
+        # Post-process categories/tags
+        categories = self._filter_taxonomy(raw.get("categories", []))
+        tags = self._filter_taxonomy(raw.get("tags", []))
+
+        return {
+            "url": url,
+            "slug": slug,
+            "doc_title": doc_title,
+            "h1": raw.get("h1", ""),
+            "meta_description": raw.get("meta_description", ""),
+            "published_date": raw.get("published_date", ""),
+            "author": raw.get("author", ""),
+            "categories": categories,
+            "tags": tags,
+            "featured_image": raw.get("featured_image", ""),
+            "content_html": cleaned_html,
+            "content_text": raw.get("content_text", ""),
+            "content_images": raw.get("content_images", []),
+            "content_image_alts": raw.get("content_image_alts", []),
+            "og_title": raw.get("og_title", ""),
+            "og_image": raw.get("og_image", ""),
+            "og_description": raw.get("og_description", ""),
+        }
+
+    def _compare_text(self, a: str, b: str) -> float:
+        import difflib
+        return difflib.SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
+
+    def _compare_sets(self, a: list, b: list) -> float:
+        sa, sb = set(x.strip().lower() for x in a if x.strip()), set(x.strip().lower() for x in b if x.strip())
+        if not sa and not sb:
+            return 1.0
+        union = sa | sb
+        if not union:
+            return 1.0
+        intersection = sa & sb
+        return len(intersection) / len(union)
+
+    def _check_unicode(self, text: str) -> list[str]:
+        issues = []
+        if "\ufffd" in text:
+            issues.append("Contains replacement character (�)")
+        if "\u2013" in text or "\u2014" in text:
+            pass  # en-dash / em-dash is fine
+        for ch in text:
+            if ord(ch) > 127 and ch not in "\u2013\u2014\u2018\u2019\u201c\u201d\u2026\u00a0\u00e9\u00e8\u00ea\u00eb\u00f1\u00fc\u00f6\u00e4\u00df\u00b0":
+                if ord(ch) < 160:
+                    issues.append(f"Unicode issue: char U+{ord(ch):04X} found")
+        return issues
+
+    def _check_image_localization(self, images: list[str], target_domain: str) -> list[str]:
+        issues = []
+        for img_url in images:
+            if not img_url:
+                continue
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(img_url)
+                if parsed.netloc and parsed.netloc != target_domain:
+                    if "dealeron" in parsed.netloc or "dealerdotinspire" in parsed.netloc:
+                        issues.append(f"External image from {parsed.netloc}: {img_url[:80]}")
+                    elif not img_url.startswith("data:"):
+                        issues.append(f"External image from {parsed.netloc}: {img_url[:80]}")
+            except Exception:
+                pass
+        return issues
+
+    def _compare_entry(self, source: dict, target: dict) -> dict:
+        fields = {}
+        issues = []
+        total_score = 0.0
+        field_count = 0
+
+        # Document title
+        title_sim = self._compare_text(source.get("doc_title", ""), target.get("doc_title", ""))
+        fields["title"] = {
+            "source": source.get("doc_title", ""),
+            "target": target.get("doc_title", ""),
+            "score": round(title_sim * 100, 1),
+            "match": title_sim > 0.85,
+        }
+        total_score += title_sim
+        field_count += 1
+
+        # H1
+        h1_sim = self._compare_text(source.get("h1", ""), target.get("h1", ""))
+        fields["h1"] = {
+            "source": source.get("h1", ""),
+            "target": target.get("h1", ""),
+            "score": round(h1_sim * 100, 1),
+            "match": h1_sim > 0.85,
+        }
+        total_score += h1_sim
+        field_count += 1
+
+        # Meta description
+        desc_sim = self._compare_text(source.get("meta_description", ""), target.get("meta_description", ""))
+        fields["meta_description"] = {
+            "source": source.get("meta_description", ""),
+            "target": target.get("meta_description", ""),
+            "score": round(desc_sim * 100, 1),
+            "match": desc_sim > 0.85 or (not source.get("meta_description") and not target.get("meta_description")),
+        }
+        total_score += desc_sim
+        field_count += 1
+
+        # Slug
+        slug_sim = self._compare_text(source.get("slug", ""), target.get("slug", ""))
+        fields["slug"] = {
+            "source": source.get("slug", ""),
+            "target": target.get("slug", ""),
+            "score": round(slug_sim * 100, 1),
+            "match": slug_sim > 0.95,
+        }
+        total_score += slug_sim
+        field_count += 1
+
+        # Date
+        date_sim = self._compare_text(source.get("published_date", ""), target.get("published_date", ""))
+        fields["published_date"] = {
+            "source": source.get("published_date", ""),
+            "target": target.get("published_date", ""),
+            "score": round(date_sim * 100, 1),
+            "match": date_sim > 0.9 or (not source.get("published_date") and not target.get("published_date")),
+        }
+        total_score += date_sim
+        field_count += 1
+
+        # Author
+        author_sim = self._compare_text(source.get("author", ""), target.get("author", ""))
+        fields["author"] = {
+            "source": source.get("author", ""),
+            "target": target.get("author", ""),
+            "score": round(author_sim * 100, 1),
+            "match": author_sim > 0.9 or (not source.get("author") and not target.get("author")),
+        }
+        total_score += author_sim
+        field_count += 1
+
+        # Categories
+        cat_sim = self._compare_sets(source.get("categories", []), target.get("categories", []))
+        fields["categories"] = {
+            "source": source.get("categories", []),
+            "target": target.get("categories", []),
+            "score": round(cat_sim * 100, 1),
+            "match": cat_sim > 0.8,
+        }
+        total_score += cat_sim
+        field_count += 1
+
+        # Tags
+        tag_sim = self._compare_sets(source.get("tags", []), target.get("tags", []))
+        fields["tags"] = {
+            "source": source.get("tags", []),
+            "target": target.get("tags", []),
+            "score": round(tag_sim * 100, 1),
+            "match": tag_sim > 0.8,
+        }
+        total_score += tag_sim
+        field_count += 1
+
+        # Featured image
+        fi_sim = self._compare_text(source.get("featured_image", ""), target.get("featured_image", ""))
+        fields["featured_image"] = {
+            "source": source.get("featured_image", ""),
+            "target": target.get("featured_image", ""),
+            "score": round(fi_sim * 100, 1),
+            "match": fi_sim > 0.9 or (not source.get("featured_image") and not target.get("featured_image")),
+        }
+        total_score += fi_sim
+        field_count += 1
+
+        # Content (using text similarity)
+        src_text = source.get("content_text", "")
+        tgt_text = target.get("content_text", "")
+        content_sim = self._compare_text(src_text, tgt_text)
+        src_html = source.get("content_html", "")
+        tgt_html = target.get("content_html", "")
+
+        # Image count comparison
+        src_img_count = len(source.get("content_images", []))
+        tgt_img_count = len(target.get("content_images", []))
+        img_count_match = src_img_count == tgt_img_count
+
+        fields["content"] = {
+            "source_len": len(src_text),
+            "target_len": len(tgt_text),
+            "source_html_len": len(src_html),
+            "target_html_len": len(tgt_html),
+            "source_img_count": src_img_count,
+            "target_img_count": tgt_img_count,
+            "score": round(content_sim * 100, 1),
+            "match": content_sim > 0.8,
+        }
+        total_score += content_sim
+        field_count += 1
+
+        if not img_count_match:
+            issues.append({
+                "field": "content_images",
+                "type": "image_count_mismatch",
+                "severity": "high",
+                "message": f"Image count differs: source={src_img_count}, target={tgt_img_count}",
+            })
+
+        # Unicode checks
+        for label, text_val in [
+            ("title", source.get("doc_title", "")),
+            ("title_target", target.get("doc_title", "")),
+            ("h1", source.get("h1", "")),
+            ("h1_target", target.get("h1", "")),
+            ("content_source", src_text),
+            ("content_target", tgt_text),
+        ]:
+            for issue in self._check_unicode(text_val):
+                issues.append({
+                    "field": label,
+                    "type": "unicode",
+                    "severity": "critical",
+                    "message": issue,
+                })
+
+        # Image localization
+        tgt_domain = ""
+        try:
+            from urllib.parse import urlparse
+            tgt_domain = urlparse(target.get("url", "")).netloc
+        except Exception:
+            pass
+
+        for img_url in target.get("content_images", []):
+            for issue in self._check_image_localization([img_url], tgt_domain):
+                issues.append({
+                    "field": "content_images",
+                    "type": "unlocalized_image",
+                    "severity": "high",
+                    "message": issue,
+                })
+
+        # Content empty check
+        if src_text and not tgt_text:
+            issues.append({
+                "field": "content",
+                "type": "missing",
+                "severity": "critical",
+                "message": "Target content is empty but source has content",
+            })
+        elif not src_text and tgt_text:
+            issues.append({
+                "field": "content",
+                "type": "source_missing",
+                "severity": "high",
+                "message": "Source content is empty but target has content",
+            })
+
+        overall_score = round((total_score / max(field_count, 1)) * 100, 1)
+
+        return {
+            "source_url": source.get("url", ""),
+            "target_url": target.get("url", ""),
+            "overall_score": overall_score,
+            "fields": fields,
+            "issues": issues,
+            "status": "ok" if overall_score >= 80 else "issues_found",
+        }
+
+    def run(self) -> None:
+        self.results = {"audit": []}
+        self.progress_done = 0
+        self.status = "Starting browser..."
+        self._report_progress()
+
+        viewport = self.runtime_cfg["viewport"]
+        from extraction import list_rulesets, load_ruleset
+        available = list_rulesets()
+        if self._ruleset_name not in available:
+            self._ruleset_name = "generic_blog" if "generic_blog" in available else (available[0] if available else "")
+        self._rules = load_ruleset(self._ruleset_name) or []
+
+        if not self._rules:
+            self.status = f"Error: No extraction rules found (tried: {self._ruleset_name})"
+            self._report_progress()
+            return
+
+        self.status = f"Using ruleset: {self._ruleset_name}"
+
+        self.status = f"Processing {len(self.url_pairs)} blog post pairs..."
+        self._report_progress()
+
+        audit_items: list[dict] = []
+
+        try:
+            with SB(
+                uc=True, test=True, headless=False,
+                window_size=f"{viewport['width']},{viewport['height']}",
+            ) as sb:
+                page = PageCapture(sb, self.runtime_cfg)
+
+                for idx, (src_url, tgt_url) in enumerate(self.url_pairs):
+                    if self.cancelled:
+                        break
+
+                    self.status = f"[{idx + 1}/{len(self.url_pairs)}] Source: {src_url}"
+                    self._report_progress()
+
+                    source_data = {}
+                    target_data = {}
+
+                    try:
+                        source_data = self._extract_blog_data(page, src_url)
+                    except Exception as exc:
+                        source_data = {
+                            "url": src_url,
+                            "slug": self._extract_slug(src_url),
+                            "status": f"error: {exc}",
+                        }
+
+                    self.status = f"[{idx + 1}/{len(self.url_pairs)}] Target: {tgt_url}"
+                    self._report_progress()
+
+                    try:
+                        target_data = self._extract_blog_data(page, tgt_url)
+                    except Exception as exc:
+                        target_data = {
+                            "url": tgt_url,
+                            "slug": self._extract_slug(tgt_url),
+                            "status": f"error: {exc}",
+                        }
+
+                    comparison = self._compare_entry(source_data, target_data)
+                    audit_items.append(comparison)
+                    self.progress_done = idx + 1
+                    self._report_progress()
+
+        except Exception as exc:
+            self.status = f"Browser error: {exc}"
+            self._report_progress()
+
+        self.results["audit"] = audit_items
+        self.progress_done = self.progress_total
+        self.status = "done"
+        self._report_progress()
+
+        data_dir = self.output_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = data_dir / "audit_results.json"
+        try:
+            audit_path.write_text(json.dumps(audit_items, indent=2, default=str), encoding="utf-8")
+        except OSError:
+            pass
+
+        total = len(audit_items)
+        ok_count = sum(1 for r in audit_items if r.get("status") == "ok")
+
+        save_history({
+            "timestamp": datetime.now().isoformat(),
+            "kind": "blog_audit",
+            "total": total,
+            "ok": ok_count,
+            "fail": total - ok_count,
+            "output_dir": str(self.output_dir),
+            "results": audit_items,
+            "collectors": ["blog_audit"],
+            "fast_mode": False,
+        })

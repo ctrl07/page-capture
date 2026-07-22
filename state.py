@@ -24,12 +24,18 @@ _ACTIVE_RUNNERS: dict[str, dict[str, Any]] = {}
 def register_runner(runner: Any) -> None:
     """Store runner in module-level registry + write disk manifest."""
     key = str(runner.output_dir)
+    kind = "unified"
+    if hasattr(runner, "_refresh_session"):
+        kind = "fast_seo"
+    elif hasattr(runner, "_compare_entry"):
+        kind = "blog_audit"
+
     _ACTIVE_RUNNERS[key] = {
         "runner": runner,
         "output_dir": str(runner.output_dir),
-        "urls": getattr(runner, "urls", []),
+        "urls": getattr(runner, "urls", getattr(runner, "source_urls", [])),
         "total": getattr(runner, "progress_total", 0),
-        "kind": "fast_seo" if hasattr(runner, "_refresh_session") else "unified",
+        "kind": kind,
     }
     _write_manifest(runner)
 
@@ -43,11 +49,17 @@ def unregister_runner(runner: Any) -> None:
 
 def _write_manifest(runner: Any) -> None:
     """Write active run manifest to disk."""
+    kind = "unified"
+    if hasattr(runner, "_refresh_session"):
+        kind = "fast_seo"
+    elif hasattr(runner, "_compare_entry"):
+        kind = "blog_audit"
+
     manifest = {
         "output_dir": str(runner.output_dir),
         "total": getattr(runner, "progress_total", 0),
-        "urls_count": len(getattr(runner, "urls", [])),
-        "kind": "fast_seo" if hasattr(runner, "_refresh_session") else "unified",
+        "urls_count": len(getattr(runner, "url_pairs", getattr(runner, "urls", []))),
+        "kind": kind,
     }
     try:
         _MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -88,17 +100,24 @@ def init_session_state() -> None:
         "extraction_rules": [],
         "unified_runner": None,
         "unified_running": False,
+        "blog_audit_runner": None,
+        "blog_audit_running": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
     # Recover active run from module-level registry (survives Streamlit reruns)
-    if _ACTIVE_RUNNERS and not st.session_state.get("unified_running"):
+    if _ACTIVE_RUNNERS and not (st.session_state.get("unified_running") or st.session_state.get("blog_audit_running")):
         for key, entry in _ACTIVE_RUNNERS.items():
             runner = entry["runner"]
             thread = getattr(runner, "_thread", None)
             if thread and thread.is_alive():
-                st.session_state.unified_runner = runner
-                st.session_state.unified_running = True
+                kind = entry.get("kind", "unified")
+                if kind == "blog_audit":
+                    st.session_state.blog_audit_runner = runner
+                    st.session_state.blog_audit_running = True
+                else:
+                    st.session_state.unified_runner = runner
+                    st.session_state.unified_running = True
                 break

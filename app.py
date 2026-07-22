@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from app_pages.blog_audit import page_blog_audit
 from app_pages.capture import page_new_run
 from app_pages.dashboard import page_dashboard
 from app_pages.projects import page_projects
@@ -30,7 +31,14 @@ def main() -> None:
             st.markdown("---")
             done = runner.progress_done
             total = runner.progress_total
-            st.markdown(f"**Running** — {done}/{total}")
+            st.markdown(f"**Running Capture** — {done}/{total}")
+            st.caption(runner.status if runner.status else "Processing...")
+        elif st.session_state.get("blog_audit_running") and st.session_state.get("blog_audit_runner"):
+            runner = st.session_state.blog_audit_runner
+            st.markdown("---")
+            done = runner.progress_done
+            total = runner.progress_total
+            st.markdown(f"**Running Blog Audit** — {done}/{total}")
             st.caption(runner.status if runner.status else "Processing...")
 
         pages = {
@@ -41,6 +49,7 @@ def main() -> None:
             "Tools": [
                 st.Page(page_rule_sets, title="Rule Sets", icon=":material/tune:"),
                 st.Page(page_seo_analysis, title="SEO Analysis", icon=":material/analytics:"),
+                st.Page(page_blog_audit, title="Blog Audit", icon=":material/article:"),
             ],
             "Library": [
                 st.Page(page_projects, title="Projects", icon=":material/folder:"),
