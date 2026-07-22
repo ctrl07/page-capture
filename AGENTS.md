@@ -121,6 +121,73 @@ Library
 - Callback-based progress — all runners support progress_callback, progress.py uses callback registry
 - 124 tests passing
 
+### Phase 2 — Crawl4AI Screaming Frog-like Crawl
+Planned enhancements to the Crawl4AIRunner to match Screaming Frog SEO Spider capabilities.
+
+#### Step 1: Core Crawl Configuration
+- **Crawl depth control**: Add `max_depth` parameter (0 = initial URLs only, 1 = one hop, etc.)
+- **URL filtering**: Add include/exclude regex patterns (`include_patterns`, `exclude_patterns`)
+- **Parameter handling**: Option to strip/ignore/sort URL query parameters for dedup
+- **Redirect control**: Configurable redirect following with chain tracking
+- **Robots.txt respect**: Optional robots.txt parsing and adherence
+- **Rate limiting**: Per-domain rate limits with burst control
+
+Files: `runners.py` (Crawl4AIRunner.__init__, _crawl4ai_config, _crawl), `config.yaml` (crawl4ai section)
+
+#### Step 2: Enhanced Data Extraction
+- **Custom CSS/XPath field extraction**: Allow user-defined selectors in crawl config
+- **Element counting**: Count elements matching a selector per page
+- **Element existence**: Boolean check if a selector matches any element
+- **Attribute extraction**: Extract specific attributes from matched elements
+- **Text extraction**: Extract innerText from matched elements
+- **Regex extraction**: Apply regex to page text for pattern matching
+- **Custom field storage**: Store custom fields alongside standard SEO data in results
+
+Files: `runners.py` (Crawl4AIRunner._transform_result), `extraction.py`, `config.yaml`
+
+#### Step 3: Link and Redirect Analysis
+- **Link detail tracking**: Per-link data (anchor text, href, rel attributes, position)
+- **Redirect chain recording**: Full redirect URL chain + final status code
+- **Broken link detection**: 4xx/5xx error identification with URL context
+- **Canonical chain analysis**: Follow and report canonical redirect paths
+- **Hreflang validation**: Verify valid language codes, x-default presence, consistency
+- **Inlink count per page**: Total internal links pointing to each URL
+
+Files: `runners.py`, `analysis.py`
+
+#### Step 4: On-Page SEO Auditing
+- **Page size tracking**: Download size for each URL
+- **Image detail extraction**: Dimensions, file size, format, alt text
+- **Content type detection**: text/html, application/pdf, etc.
+- **Response time capture**: Server response time per URL
+- **Structured data validation**: Parse and validate JSON-LD schemas
+- **Boilerplate/content ratio**: Detect thin content vs. boilerplate
+
+Files: `runners.py`, `analysis.py`
+
+#### Step 5: Export and Reporting
+- **Excel export**: Export results as .xlsx with multiple sheets (SEO data, custom fields, issues)
+- **JSON export**: Raw result export in JSON format
+- **Issue summary report**: Generate crawl-wide issue summary with counts
+- **Crawl statistics**: URL count by status code, content type, depth, etc.
+- **Export UI**: Download buttons for each format in results view
+
+Files: `components/results_viewer.py`, `pages/capture.py`, `pages/seo_analysis.py`
+
+#### Step 6: UI Configuration
+- **Crawl config panel**: Expandable config section in capture page for Crawl4AI mode
+  - Depth slider
+  - Include/exclude pattern inputs
+  - Custom field selector (from Rule Sets)
+  - Redirect follow/depth settings
+- **Real-time crawl stats**: Live statistics bar during crawl (URLs crawled, errors, rate)
+  - Already have callback-based progress — extend to show detailed stats
+- **Crawl visualization**: Generate site tree / depth visualization post-crawl
+  - Use Streamlit's tree or graph elements
+  - Show URL distribution by depth, status, content type
+
+Files: `pages/capture.py`, `pages/seo_analysis.py`, `components/progress.py`
+
 ## Key Decisions
 - **No cloud deployment** — local-only desktop app, no CI/CD
 - **No Playwright** — SeleniumBase with CDP handles all browser automation
