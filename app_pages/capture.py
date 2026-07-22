@@ -291,13 +291,7 @@ def _render_settings_panel() -> tuple[dict, str, dict]:
     st.markdown("**Settings**")
     s1, s2 = st.columns(2)
     with s1:
-        ss_width = st.number_input(
-            "Width",
-            value=CONFIG["viewport"]["width"],
-            min_value=320,
-            max_value=3840,
-            key="newrun_width",
-        )
+        st.metric("Width", CONFIG["viewport"]["width"])
         st.number_input(
             "Delay (s)",
             value=CONFIG["timing"]["stabilization_ms"] / 1000,
@@ -306,13 +300,7 @@ def _render_settings_panel() -> tuple[dict, str, dict]:
             key="newrun_delay",
         )
     with s2:
-        ss_height = st.number_input(
-            "Height",
-            value=CONFIG["viewport"]["height"],
-            min_value=320,
-            max_value=2160,
-            key="newrun_height",
-        )
+        st.metric("Height", CONFIG["viewport"]["height"])
         output_name = st.text_input(
             "Folder name",
             value=st.session_state.newrun_output,
@@ -420,7 +408,7 @@ def _render_settings_panel() -> tuple[dict, str, dict]:
                     "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
                 }
 
-    viewport = {"width": int(ss_width), "height": int(ss_height)}
+    viewport = {"width": int(CONFIG["viewport"]["width"]), "height": int(CONFIG["viewport"]["height"])}
     return viewport, crawl_mode, crawl_config
 
 
@@ -455,7 +443,7 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], cr
         output_dir.mkdir(parents=True, exist_ok=True)
         runtime_cfg = build_runtime_config(
             CONFIG,
-            viewport={"width": int(st.session_state.newrun_width), "height": int(st.session_state.newrun_height)},
+            viewport={"width": int(CONFIG["viewport"]["width"]), "height": int(CONFIG["viewport"]["height"])},
             stabilization_ms=int(st.session_state.newrun_delay * 1000),
         )
 
