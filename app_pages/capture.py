@@ -226,16 +226,10 @@ def _render_url_source_panel() -> list[str]:
 
 
 def _render_collectors_panel() -> dict[str, bool]:
-    """Render collector checkboxes, return dict of enabled collectors."""
+    """Render collector toggles for SEO and Custom Rules (Screenshots is separate)."""
     collectors = st.session_state.newrun_collectors
 
-    st.markdown("**Collectors**")
     with st.container(horizontal=True, gap="small"):
-        collectors["screenshot"] = st.toggle(
-            "Screenshots",
-            value=collectors.get("screenshot", True),
-            key="newrun_do_ss",
-        )
         collectors["seo"] = st.toggle(
             "SEO data",
             value=collectors.get("seo", True),
@@ -266,8 +260,34 @@ def _render_collectors_panel() -> dict[str, bool]:
     return collectors
 
 
-def _render_settings_panel() -> tuple[dict, str, bool, dict]:
-    """Render settings panel, return (viewport, crawl_mode, generate_pdf, crawl_config)."""
+def _render_screenshot_section() -> None:
+    """Render screenshot toggle with PDF option in its own section."""
+    collectors = st.session_state.newrun_collectors
+    st.markdown("**Screenshots**")
+
+    col_ss, col_pdf = st.columns(2)
+    with col_ss:
+        collectors["screenshot"] = st.toggle(
+            "Capture",
+            value=collectors.get("screenshot", True),
+            key="newrun_do_ss",
+        )
+    with col_pdf:
+        generate_pdf = st.toggle(
+            "Generate PDFs",
+            value=st.session_state.get("newrun_generate_pdf", False),
+            key="newrun_generate_pdf",
+            help="Convert each screenshot PNG to a lossless PDF alongside it.",
+        )
+
+    st.session_state.newrun_collectors = collectors
+
+    if generate_pdf and not collectors.get("screenshot"):
+        st.warning("PDFs require screenshots — enable the Screenshots collector.")
+
+
+def _render_settings_panel() -> tuple[dict, str, dict]:
+    """Render settings panel, return (viewport, crawl_mode, crawl_config)."""
     st.markdown("**Settings**")
     s1, s2 = st.columns(2)
     with s1:
@@ -400,18 +420,8 @@ def _render_settings_panel() -> tuple[dict, str, bool, dict]:
                     "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
                 }
 
-    generate_pdf = st.toggle(
-        "Generate PDFs",
-        value=st.session_state.get("newrun_generate_pdf", False),
-        key="newrun_generate_pdf",
-        help="Convert each screenshot PNG to a lossless PDF alongside it.",
-    )
-    if generate_pdf and not st.session_state.newrun_collectors.get("screenshot"):
-        st.warning("PDFs require screenshots — enable the Screenshots collector.")
-        generate_pdf = False
-
     viewport = {"width": int(ss_width), "height": int(ss_height)}
-    return viewport, crawl_mode, generate_pdf, crawl_config
+    return viewport, crawl_mode, crawl_config
 
 
 def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], crawl_config: dict | None = None) -> None:
@@ -536,11 +546,15 @@ def page_new_run() -> None:
 
     with right:
         with st.container(border=True):
-            st.markdown("### Configuration")
+            st.markdown("### Collectors")
             _render_collectors_panel()
 
             st.markdown("---")
-            viewport, crawl_mode, generate_pdf, crawl_config = _render_settings_panel()
+            _render_screenshot_section()
+
+            st.markdown("---")
+            st.markdown("### Settings")
+            viewport, crawl_mode, crawl_config = _render_settings_panel()
 
             st.markdown("---")
             _render_run_button(existing_urls, st.session_state.newrun_collectors, crawl_config)
