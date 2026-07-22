@@ -282,6 +282,34 @@ def render_unified_results(runner: UnifiedRunner | FastRunnerLegacy, key_prefix:
                     file_name="seo_results.csv", mime="text/csv",
                     key=f"{key_prefix}dl_seo", width="stretch",
                 )
+
+                # Excel export (from data dir if available)
+                data_dir = runner.output_dir / "data"
+                xlsx_path = data_dir / "seo_results.xlsx"
+                if xlsx_path.is_file():
+                    with open(xlsx_path, "rb") as f:
+                        st.download_button(
+                            "Excel (.xlsx)",
+                            data=f.read(),
+                            file_name="seo_results.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"{key_prefix}dl_xlsx",
+                            width="stretch",
+                        )
+
+                # JSON export
+                json_path = data_dir / "seo_results.json"
+                if json_path.is_file():
+                    with open(json_path, "rb") as f:
+                        st.download_button(
+                            "JSON",
+                            data=f.read(),
+                            file_name="seo_results.json",
+                            mime="application/json",
+                            key=f"{key_prefix}dl_json",
+                            width="stretch",
+                        )
+
         with dl_cols[2]:
             if runner.results.get("extraction"):
                 all_keys = list(dict.fromkeys(k for r in runner.results["extraction"] for k in r))

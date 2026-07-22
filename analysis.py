@@ -59,6 +59,9 @@ HOW_TO_FIX: dict[str, str] = {
     "hreflang_mismatch": "Ensure all hreflang entries reference the same set of languages across linked pages.",
     "broken_links_found": "Fix broken links (4xx/5xx) pointing from your pages to improve user experience.",
     "canonical_chain_too_long": "Shorten canonical redirect chains to avoid SEO dilution.",
+    "images_missing_dimensions": "Add explicit width/height attributes to images to improve LCP and avoid layout shift.",
+    "images_large_filesize": "Compress large images to improve page load speed.",
+    "thin_boilerplate": "Page has high boilerplate-to-content ratio. Add more substantive content.",
 }
 
 
@@ -264,6 +267,40 @@ def analyze_results(results: list[dict]) -> list[Issue]:
     ]
     if urls:
         issues.append(Issue("images", "opportunity", "images_not_lazy", urls))
+
+    # Images missing dimensions (from images_detail)
+    missing_dim_urls = []
+    for r in ok:
+        imgs = r.get("images_detail", [])
+        has_missing = any(
+            not img.get("width") or not img.get("height")
+            for img in imgs if img.get("src")
+        )
+        if has_missing:
+            missing_dim_urls.append(r.get("url", ""))
+    if missing_dim_urls:
+        issues.append(Issue("images", "opportunity", "images_missing_dimensions", missing_dim_urls))
+
+    # Large image filesize warning
+    large_img_urls = []
+    for r in ok:
+        imgs = r.get("images_detail", [])
+        has_large = any(
+            (img.get("filesize") or 0) > 500_000
+            for img in imgs
+        )
+        if has_large:
+            large_img_urls.append(r.get("url", ""))
+    if large_img_urls:
+        issues.append(Issue("images", "warning", "images_large_filesize", large_img_urls))
+
+    # Boilerplate ratio check
+    bp_urls = [
+        r.get("url", "") for r in ok
+        if isinstance(r.get("boilerplate_ratio"), (int, float)) and r["boilerplate_ratio"] > 0.7
+    ]
+    if bp_urls:
+        issues.append(Issue("content", "warning", "thin_boilerplate", bp_urls))
 
     # ── Schema issues ──
     urls = _empty(ok, "schema_types")

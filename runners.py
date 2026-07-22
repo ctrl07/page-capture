@@ -88,6 +88,123 @@ def write_results_csv(results: list[dict], csv_path: Path) -> None:
         w.writerows(results)
 
 
+def write_results_excel(results: list[dict], xlsx_path: Path) -> None:
+    """Write SEO results to an Excel workbook with multiple sheets."""
+    if not results:
+        return
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+
+    xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: SEO data (flat fields only) ──
+    flat_keys = [
+        "url", "status", "status_code", "title", "title_len",
+        "meta_description", "meta_desc_len", "canonical", "canonical_chain",
+        "robots_meta", "h1", "h2s", "h3s",
+        "og_title", "og_description", "og_image", "og_type",
+        "twitter_card", "twitter_title", "twitter_description", "twitter_image",
+        "schema_types", "word_count", "internal_links", "external_links",
+        "images_missing_alt", "images_total", "images_no_lazy",
+        "iframe_count", "form_count", "external_nofollow",
+        "html_lang", "meta_viewport", "meta_charset", "hreflang",
+        "depth", "redirect_chain", "page_size", "response_time",
+        "redirected_url", "redirected_status_code",
+        "internal_inlinks", "content_type", "boilerplate_ratio",
+    ]
+    ws1 = wb.active or wb.create_sheet("SEO Data")
+    ws1.title = "SEO Data"
+    header_font = Font(bold=True)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font_white = Font(bold=True, color="FFFFFF")
+    for col, key in enumerate(flat_keys, 1):
+        cell = ws1.cell(row=1, column=col, value=key)
+        cell.font = header_font_white
+        cell.fill = header_fill
+    for row_idx, row_data in enumerate(results, 2):
+        for col_idx, key in enumerate(flat_keys, 1):
+            ws1.cell(row=row_idx, column=col_idx, value=row_data.get(key, ""))
+
+    # Auto-adjust column widths
+    for col in ws1.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=0)
+        first_cell = col[0]
+        col_letter = first_cell.column_letter  # type: ignore[attr-defined]
+        ws1.column_dimensions[col_letter].width = min(max_len + 2, 60)
+
+    # ── Sheet 2: Issues summary (if build_issues found) ──
+    ws2 = wb.create_sheet("Issues")
+    try:
+        from analysis import analyze_results
+        issues = analyze_results(results)
+        ws2.cell(row=1, column=1, value="Category").font = header_font
+        ws2.cell(row=1, column=2, value="Severity").font = header_font
+        ws2.cell(row=1, column=3, value="Issue").font = header_font
+        ws2.cell(row=1, column=4, value="Affected URLs").font = header_font
+        for i, issue in enumerate(issues, 2):
+            ws2.cell(row=i, column=1, value=issue.category)
+            ws2.cell(row=i, column=2, value=issue.severity)
+            ws2.cell(row=i, column=3, value=issue.name)
+            ws2.cell(row=i, column=4, value=issue.count)
+        ws2.column_dimensions["A"].width = 18
+        ws2.column_dimensions["B"].width = 14
+        ws2.column_dimensions["C"].width = 30
+        ws2.column_dimensions["D"].width = 14
+    except Exception:
+        ws2.cell(row=1, column=1, value="Issue analysis not available")
+
+    wb.save(xlsx_path)
+
+
+def write_results_json(results: list[dict], json_path: Path) -> None:
+    """Write results as a JSON file."""
+    if not results:
+        return
+    import json
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "exported_at": datetime.now().isoformat(),
+        "total": len(results),
+        "ok": sum(1 for r in results if r.get("status") == "ok"),
+        "fail": sum(1 for r in results if r.get("status") != "ok"),
+        "results": results,
+    }
+    with json_path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
+def _compute_crawl_statistics(results: list[dict]) -> dict:
+    """Compute aggregate crawl statistics from results."""
+    ok = [r for r in results if r.get("status") == "ok"]
+    total = len(results)
+    return {
+        "total": total,
+        "ok": len(ok),
+        "fail": total - len(ok),
+        "by_status_code": {
+            str(sc): sum(1 for r in results if r.get("status_code") == sc)
+            for sc in sorted({r.get("status_code", 0) for r in results})
+        },
+        "by_content_type": {
+            ct: sum(1 for r in ok if r.get("content_type") == ct)
+            for ct in sorted({r.get("content_type", "") for r in ok if r.get("content_type")})
+        },
+        "by_depth": {
+            str(d): sum(1 for r in ok if r.get("depth") == d)
+            for d in sorted({r.get("depth", 0) for r in ok})
+        },
+        "total_internal_links": sum(r.get("internal_links", 0) for r in ok),
+        "total_external_links": sum(r.get("external_links", 0) for r in ok),
+        "avg_word_count": round(sum(r.get("word_count", 0) or 0 for r in ok) / max(len(ok), 1), 1),
+        "avg_page_size": round(sum(r.get("page_size", 0) or 0 for r in ok) / max(len(ok), 1), 1),
+        "avg_response_time": round(sum(r.get("response_time", 0) or 0 for r in ok) / max(len(ok), 1), 1),
+        "pages_with_broken_links": sum(1 for r in ok if r.get("broken_links")),
+        "pages_with_canonical_chain": sum(1 for r in ok if r.get("canonical_chain")),
+        "pages_with_redirects": sum(1 for r in ok if r.get("redirected_url")),
+    }
+
+
 def build_runtime_config(CONFIG: dict, viewport: dict, stabilization_ms: int) -> dict:
     """Build the runtime config dict from global CONFIG and per-run overrides."""
     return {
@@ -1009,6 +1126,7 @@ class Crawl4AIRunner:
                 "redirected_url": "", "redirected_status_code": None,
                 "canonical_chain": "", "internal_inlinks": 0,
                 "internal_links_detail": [], "external_links_detail": [],
+                "content_type": "", "images_detail": [], "boilerplate_ratio": 0.0,
             }
 
         md = result.metadata or {}
@@ -1058,6 +1176,26 @@ class Crawl4AIRunner:
         canonical_chain = []
         if canonical_url and canonical_url != url:
             canonical_chain.append(canonical_url)
+
+        # ── Step 4: On-Page SEO Auditing ──
+
+        # Extract image details from result.media
+        raw_media = getattr(result, "media", None) or {}
+        images_detail: list[dict] = []
+        for img in raw_media.get("images", []):
+            if isinstance(img, dict):
+                images_detail.append({
+                    "src": img.get("src", "") or img.get("url", ""),
+                    "alt": img.get("alt", "") or "",
+                    "width": img.get("width", 0) or 0,
+                    "height": img.get("height", 0) or 0,
+                    "filesize": img.get("filesize", 0) or img.get("size", 0),
+                    "format": img.get("type", "") or img.get("format", ""),
+                })
+
+        # Content type from response headers
+        resp_headers = getattr(result, "response_headers", None) or {}
+        content_type = (resp_headers.get("content-type", resp_headers.get("Content-Type", "")) or "").split(";")[0].strip()
 
         return {
             "url": url,
@@ -1110,6 +1248,10 @@ class Crawl4AIRunner:
             "redirected_status_code": redirected_status_code,
             "canonical_chain": " -> ".join(canonical_chain) if canonical_chain else "",
             "internal_inlinks": 0,
+            # Step 4: On-Page SEO details
+            "content_type": content_type,
+            "images_detail": images_detail,
+            "boilerplate_ratio": 0.0,
         }
 
     def _report_progress(self) -> None:
@@ -1379,11 +1521,32 @@ class Crawl4AIRunner:
                 row["broken_links"] = by_source.get(row.get("url", ""), [])
             _resolve_canonical_chains(items)
 
+            # Compute boilerplate ratio for each page
+            for row in items:
+                wc = row.get("word_count", 0) or 0
+                ps = row.get("page_size", 0) or 0
+                if ps > 0 and wc > 0:
+                    estimated_content_bytes = wc * 6
+                    row["boilerplate_ratio"] = round(max(0.0, 1.0 - estimated_content_bytes / ps), 2)
+
+        # Step 5: Export results
         csv_path = data_dir / "seo_results.csv"
         write_results_csv(items, csv_path)
+        excel_path = data_dir / "seo_results.xlsx"
+        write_results_excel(items, excel_path)
+        json_path = data_dir / "seo_results.json"
+        write_results_json(items, json_path)
 
         total = len(items)
         ok_count = sum(1 for r in items if r.get("status") == "ok")
+        stats = _compute_crawl_statistics(items) if items else {}
+        issues_summary = {}
+        if items:
+            try:
+                from analysis import analyze_results, summarize_issues
+                issues_summary = summarize_issues(analyze_results(items))
+            except Exception:
+                issues_summary = {}
         save_history({
             "timestamp": datetime.now().isoformat(),
             "kind": "crawl4ai_seo",
@@ -1394,4 +1557,6 @@ class Crawl4AIRunner:
             "results": items,
             "fast_mode": True,
             "collectors": ["seo"],
+            "crawl_statistics": stats,
+            "issues_summary": issues_summary,
         })
