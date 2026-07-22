@@ -502,7 +502,7 @@ def page_new_run() -> None:
     st.subheader("New Capture")
 
     for key, default in [
-        ("newrun_collectors", {"screenshot": True, "seo": True, "extraction": False}),
+        ("newrun_collectors", {"screenshot": False, "seo": True, "extraction": False}),
         ("newrun_output", f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"),
     ]:
         if key not in st.session_state:
