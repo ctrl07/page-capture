@@ -1559,4 +1559,5 @@ class Crawl4AIRunner:
             "collectors": ["seo"],
             "crawl_statistics": stats,
             "issues_summary": issues_summary,
+            "crawl_config": self.crawl_config,
         })

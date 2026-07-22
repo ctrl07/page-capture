@@ -285,8 +285,8 @@ def _render_collectors_panel() -> dict[str, bool]:
     return collectors
 
 
-def _render_settings_panel() -> tuple[dict, str, bool]:
-    """Render settings panel, return (viewport dict, crawl_mode, generate_pdf)."""
+def _render_settings_panel() -> tuple[dict, str, bool, dict]:
+    """Render settings panel, return (viewport, crawl_mode, generate_pdf, crawl_config)."""
     st.markdown("**Settings**")
     s1, s2 = st.columns(2)
     with s1:
@@ -337,6 +337,86 @@ def _render_settings_panel() -> tuple[dict, str, bool]:
         collectors["screenshot"] = False
         st.session_state.newrun_collectors = collectors
 
+    # Crawl4AI specific configuration panel
+    crawl_config = {}
+    if crawl_mode == "crawl4ai":
+        with st.expander("Crawl4AI Configuration", expanded=True):
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.number_input(
+                    "Max Depth",
+                    min_value=0,
+                    max_value=10,
+                    value=st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
+                    key="newrun_max_depth",
+                    help="0 = initial URLs only, 1+ = follow links up to N hops",
+                )
+                st.number_input(
+                    "Max Pages",
+                    min_value=1,
+                    max_value=10000,
+                    value=st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                    key="newrun_max_pages",
+                    help="Maximum total pages to crawl (safety limit)",
+                )
+                st.checkbox(
+                    "Strip Query Parameters",
+                    value=st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
+                    key="newrun_strip_query_params",
+                    help="Remove URL parameters before deduplication",
+                )
+                st.checkbox(
+                    "Respect Robots.txt",
+                    value=st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                    key="newrun_respect_robots_txt",
+                    help="Check and obey robots.txt rules",
+                )
+            with cc2:
+                st.text_area(
+                    "Include Patterns (regex)",
+                    value="\n".join(st.session_state.get("newrun_include_patterns", CONFIG["crawl4ai"]["include_patterns"])),
+                    key="newrun_include_patterns",
+                    help="Only crawl URLs matching these patterns (one per line)",
+                    height=70,
+                )
+                st.text_area(
+                    "Exclude Patterns (regex)",
+                    value="\n".join(st.session_state.get("newrun_exclude_patterns", CONFIG["crawl4ai"]["exclude_patterns"])),
+                    key="newrun_exclude_patterns",
+                    help="Skip URLs matching these patterns (one per line)",
+                    height=70,
+                )
+                st.text_area(
+                    "Allowed Domains",
+                    value="\n".join(st.session_state.get("newrun_allowed_domains", CONFIG["crawl4ai"]["allowed_domains"])),
+                    key="newrun_allowed_domains",
+                    help="Only crawl URLs from these domains (one per line)",
+                    height=70,
+                )
+                st.text_area(
+                    "Blocked Domains",
+                    value="\n".join(st.session_state.get("newrun_blocked_domains", CONFIG["crawl4ai"]["blocked_domains"])),
+                    key="newrun_blocked_domains",
+                    help="Skip URLs from these domains (one per line)",
+                    height=70,
+                )
+
+            raw_include = st.session_state.get("newrun_include_patterns", "")
+            raw_exclude = st.session_state.get("newrun_exclude_patterns", "")
+            raw_allowed = st.session_state.get("newrun_allowed_domains", "")
+            raw_blocked = st.session_state.get("newrun_blocked_domains", "")
+
+            crawl_config = {
+                "max_depth": st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
+                "max_pages": st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                "include_patterns": [p.strip() for p in raw_include.split("\n") if p.strip()] if raw_include else [],
+                "exclude_patterns": [p.strip() for p in raw_exclude.split("\n") if p.strip()] if raw_exclude else [],
+                "strip_query_params": st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
+                "respect_robots_txt": st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                "allowed_domains": [d.strip() for d in raw_allowed.split("\n") if d.strip()] if raw_allowed else [],
+                "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
+            }
+
     generate_pdf = st.checkbox(
         "Generate PDFs",
         value=st.session_state.get("newrun_generate_pdf", False),
@@ -348,10 +428,10 @@ def _render_settings_panel() -> tuple[dict, str, bool]:
         generate_pdf = False
 
     viewport = {"width": int(ss_width), "height": int(ss_height)}
-    return viewport, crawl_mode, generate_pdf
+    return viewport, crawl_mode, generate_pdf, crawl_config
 
 
-def _render_run_button(existing_urls: list[str], collectors: dict[str, bool]) -> None:
+def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], crawl_config: dict | None = None) -> None:
     """Render the primary run button with validation."""
     active_collectors = [k for k, v in collectors.items() if v]
     can_run = existing_urls and active_collectors
@@ -392,6 +472,7 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool]) ->
                 runtime_cfg,
                 output_dir,
                 seo_fields=st.session_state.get("newrun_seo_fields_enabled"),
+                crawl_config=crawl_config or {},
             )
         elif crawl_mode == "fast":
             runner = FastRunnerLegacy(
@@ -449,6 +530,11 @@ def page_new_run() -> None:
         restore_crawl_mode = st.session_state.pop("restore_crawl_mode", None)
         if restore_crawl_mode:
             st.session_state.newrun_crawl_mode = restore_crawl_mode
+        restore_crawl_config = st.session_state.pop("restore_crawl_config", None)
+        if restore_crawl_config and isinstance(restore_crawl_config, dict):
+            for k, v in restore_crawl_config.items():
+                skey = f"newrun_{k}"
+                st.session_state[skey] = v
 
     if st.session_state.unified_running and st.session_state.unified_runner:
         _render_active_run()
@@ -471,7 +557,7 @@ def page_new_run() -> None:
             _render_collectors_panel()
 
             st.markdown("---")
-            viewport, crawl_mode, generate_pdf = _render_settings_panel()
+            viewport, crawl_mode, generate_pdf, crawl_config = _render_settings_panel()
 
             st.markdown("---")
-            _render_run_button(existing_urls, st.session_state.newrun_collectors)
+            _render_run_button(existing_urls, st.session_state.newrun_collectors, crawl_config)
