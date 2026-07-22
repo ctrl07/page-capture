@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "DealerOn Blog",
+    "description": "DealerOn-specific blog extraction selectors",
+    "author": "Page Capture",
+    "contributors": ["stevenpelletier90 (blog-tool patterns)"],
+    "source": "https://github.com/stevenpelletier90/blog-tool",
+    "version": "1.0.0"
+  },
+  "rules": [
+    {"name": "h1", "description": "First H1 heading", "category": "content", "type": "text", "selector": "h1"},
+    {"name": "published_date", "description": "Publication date", "category": "meta", "type": "text", "selector": "div.meta-below-content .date, div.blog__entry__content .date, time[datetime], .post-date, [itemprop='datePublished'], meta[property='article:published_time']"},
+    {"name": "author", "description": "Post author", "category": "meta", "type": "text", "selector": "meta[name='author'], .author, [rel='author'], .byline, [itemprop='author']"},
+    {"name": "categories", "description": "Post categories", "category": "taxonomy", "type": "text", "selector": "div.meta-below-content a[rel='category tag'], div.blog__entry__content__categories a, div.blog__entry a, div.categories a, a[rel='category tag']", "multiple": true},
+    {"name": "tags", "description": "Post tags", "category": "taxonomy", "type": "text", "selector": "ul.blog__entry__content__tags li a, div.blog__entry ul li a, .tags a, .tag a", "multiple": true},
+    {"name": "featured_image", "description": "Featured image URL", "category": "images", "type": "attribute", "selector": "div.blog__entry__image img, .featured-image img, .post-thumbnail img, article img:first-of-type, [itemprop='image']", "attribute": "src"},
+    {"name": "content_html", "description": "Full post content HTML", "category": "content", "type": "html", "selector": "div.blog__article__content__text, div.blog__entry__content > div, div.blog__entry__content, div.editor, div.entry-content.text-content-container, div.entry, article .entry-content, [itemprop='articleBody']"},
+    {"name": "content_text", "description": "Post content plain text", "category": "content", "type": "text", "selector": "div.blog__article__content__text, div.blog__entry__content > div, div.blog__entry__content, div.editor, div.entry-content.text-content-container, div.entry, article .entry-content, [itemprop='articleBody']"},
+    {"name": "content_images", "description": "All image URLs in content", "category": "images", "type": "attribute", "selector": "div.blog__article__content__text img, div.blog__entry__content img, div.editor img, div.entry img, .entry-content img", "attribute": "src", "multiple": true},
+    {"name": "content_image_alts", "description": "Alt text for all images", "category": "images", "type": "attribute", "selector": "div.blog__article__content__text img, div.blog__entry__content img, div.editor img, div.entry img, .entry-content img", "attribute": "alt", "multiple": true},
+    {"name": "meta_description", "description": "Meta description content", "category": "meta", "type": "meta", "selector": "meta[name='description']", "attribute": "name"},
+    {"name": "og_title", "description": "Open Graph title", "category": "open_graph", "type": "meta", "selector": "meta[property='og:title']", "attribute": "property"},
+    {"name": "og_image", "description": "Open Graph image URL", "category": "open_graph", "type": "meta", "selector": "meta[property='og:image']", "attribute": "property"},
+    {"name": "og_description", "description": "Open Graph description", "category": "open_graph", "type": "meta", "selector": "meta[property='og:description']", "attribute": "property"}
+  ]
+}

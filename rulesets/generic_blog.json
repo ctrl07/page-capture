@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "name": "Generic Blog",
+    "description": "Multi-platform blog extraction selectors for WordPress, Wix, DealerOn, Webflow, and generic blogs",
+    "author": "Page Capture",
+    "contributors": ["stevenpelletier90 (blog-tool patterns)"],
+    "source": "https://github.com/stevenpelletier90/blog-tool",
+    "version": "1.0.0"
+  },
+  "rules": [
+    {"name": "h1", "description": "First H1 heading", "category": "content", "type": "text", "selector": "h1[data-hook='post-title'], h1.slider-heading, h1.H3vOVf, h1"},
+    {"name": "published_date", "description": "Publication date", "category": "meta", "type": "text", "selector": "time[datetime], .date, .published, .post-date, [itemprop='datePublished'], meta[property='article:published_time'], time.published, .entry-date, .date-published"},
+    {"name": "author", "description": "Post author", "category": "meta", "type": "text", "selector": ".author, [rel='author'], .byline, meta[name='author'], .post-author, [itemprop='author'], .entry-author, .author-name, .post__author"},
+    {"name": "categories", "description": "Post categories", "category": "taxonomy", "type": "text", "selector": "div.blog__entry__content__categories a, div.meta-below-content a[rel='category tag'], div.categories a, a[rel='category tag'], [rel='category'], ul[aria-label='Post categories'] a, section ul.pRGtWE li a, meta[name='article:section'], .category, .categories a, .post-categories a, .post-categories li", "multiple": true},
+    {"name": "tags", "description": "Post tags", "category": "taxonomy", "type": "text", "selector": "ul.blog__entry__content__tags li a, nav[aria-label='Tags'] ul li a, .zmug2R li a, ._u2fqx, .tag a, .tags a, [rel='tag'], .post-tags a, .post-tags li, .entry-tags a", "multiple": true},
+    {"name": "featured_image", "description": "Featured image URL", "category": "images", "type": "attribute", "selector": ".featured-image img, .post-thumbnail img, article img:first-of-type, [itemprop='image'], .wp-post-image, .post-image img, .entry-image img, img.featured", "attribute": "src"},
+    {"name": "content_html", "description": "Full post content HTML", "category": "content", "type": "html", "selector": "div.blog__article__content__text, div.blog__entry__content > div, div.blog__entry__content, div.editor, div.entry-content.text-content-container, div.rich-text-block, div.post-body-container, section[data-hook='post-description'], div.entry, div.blogContent, div.elementor-widget-theme-post-content, div[data-elementor-type='wp-post'], div[data-elementor-type='wp-page'], article .entry-content, .post-content, .article-content, article, [itemprop='articleBody'], .content, .blog-content, main"},
+    {"name": "content_text", "description": "Post content plain text", "category": "content", "type": "text", "selector": "div.blog__article__content__text, div.blog__entry__content > div, div.blog__entry__content, div.editor, div.entry-content.text-content-container, div.rich-text-block, div.post-body-container, section[data-hook='post-description'], div.entry, div.blogContent, div.elementor-widget-theme-post-content, div[data-elementor-type='wp-post'], div[data-elementor-type='wp-page'], article .entry-content, .post-content, .article-content, article, [itemprop='articleBody'], .content, .blog-content, main"},
+    {"name": "content_images", "description": "All image URLs in content", "category": "images", "type": "attribute", "selector": "div.blog__article__content__text img, div.blog__entry__content img, div.editor img, div.rich-text-block img, div.post-body-container img, div.entry img, div.blogContent img, div[data-elementor-type] img, .entry-content img, .post-content img, article img, .content img", "attribute": "src", "multiple": true},
+    {"name": "content_image_alts", "description": "Alt text for all images", "category": "images", "type": "attribute", "selector": "div.blog__article__content__text img, div.blog__entry__content img, div.editor img, div.rich-text-block img, div.post-body-container img, div.entry img, div.blogContent img, div[data-elementor-type] img, .entry-content img, .post-content img, article img, .content img", "attribute": "alt", "multiple": true},
+    {"name": "meta_description", "description": "Meta description content", "category": "meta", "type": "meta", "selector": "meta[name='description']", "attribute": "name"},
+    {"name": "og_title", "description": "Open Graph title", "category": "open_graph", "type": "meta", "selector": "meta[property='og:title']", "attribute": "property"},
+    {"name": "og_image", "description": "Open Graph image URL", "category": "open_graph", "type": "meta", "selector": "meta[property='og:image']", "attribute": "property"},
+    {"name": "og_description", "description": "Open Graph description", "category": "open_graph", "type": "meta", "selector": "meta[property='og:description']", "attribute": "property"},
+    {"name": "og_url", "description": "Open Graph URL", "category": "open_graph", "type": "meta", "selector": "meta[property='og:url']", "attribute": "property"}
+  ]
+}
