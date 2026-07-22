@@ -143,8 +143,10 @@ def page_rule_sets() -> None:
                     width="stretch",
                     type="primary",
                 )
-                with st.expander("Preview JSON"):
-                    st.code(json_str, language="json")
+                preview_exp = st.expander("Preview JSON")
+                if preview_exp.open:
+                    with preview_exp:
+                        st.code(json_str, language="json")
             else:
                 st.info("No rules to export")
 

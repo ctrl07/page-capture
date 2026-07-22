@@ -353,8 +353,10 @@ def render_results_grid(results: list[dict], kind: str, output_dir: Path, key_pr
                 st.image(str(file_path), width="stretch")
                 st.caption(file_path.stem)
                 status = row.get("status", "")
-                badge = "✅ OK" if status == "ok" else "❌ Failed"
-                st.markdown(f"**{badge}**")
+                if status == "ok":
+                    st.markdown(":green-badge[:material/check_circle: OK]")
+                else:
+                    st.markdown(":red-badge[:material/cancel: Failed]")
                 if st.checkbox("Select", key=f"{key_prefix}grid_cb_{orig_idx}"):
                     selected.append(row)
 

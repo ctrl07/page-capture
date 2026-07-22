@@ -189,16 +189,16 @@ def page_seo_analysis() -> None:
     categories = group_issues_by_category(issues)
 
     # ── Health Score ──────────────────────────────────────────────────
-    st.metric("Health Score", f"{health_score}/100", delta=None)
+    st.metric("Health Score", f"{health_score}/100", delta=None, border=True)
     st.progress(health_score / 100)
 
     # ── Summary Metrics ───────────────────────────────────────────────
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total URLs", len(results))
-    m2.metric("OK", total_pages)
-    m3.metric("Errors", summary["errors"])
-    m4.metric("Warnings", summary["warnings"])
-    m5.metric("Opportunities", summary["opportunities"])
+    with st.container(horizontal=True):
+        st.metric("Total URLs", len(results), border=True)
+        st.metric("OK", total_pages, border=True)
+        st.metric("Errors", summary["errors"], border=True)
+        st.metric("Warnings", summary["warnings"], border=True)
+        st.metric("Opportunities", summary["opportunities"], border=True)
 
     st.markdown("---")
 
@@ -230,7 +230,7 @@ def page_seo_analysis() -> None:
                     opps = sum(i.count for i in cat_issues if i.severity == "opportunity")
                     total = errors + warns + opps
                     if total > 0:
-                        st.metric(cat_name, total, delta=f"🔴{errors} 🟡{warns} 🔵{opps}", delta_color="off")
+                        st.metric(cat_name, total, delta=f":red[{errors}] :orange[{warns}] :blue[{opps}]", delta_color="off")
 
         st.markdown("")
 
@@ -244,37 +244,39 @@ def page_seo_analysis() -> None:
             warnings = sum(i.count for i in cat_issues_filtered if i.severity == "warning")
             opps = sum(i.count for i in cat_issues_filtered if i.severity == "opportunity")
 
-            with st.expander(
+            cat_exp = st.expander(
                 f"{cat_name} — {errors} errors, {warnings} warnings, {opps} opportunities"
                 if errors + warnings + opps > 0
                 else f"{cat_name} — no issues",
                 expanded=errors > 0,
-            ):
-                for issue in cat_issues_filtered:
-                    if issue.count == 0:
-                        continue
-                    badge = {"error": "🔴", "warning": "🟡", "opportunity": "🔵"}[issue.severity]
-                    label = issue.name.replace("_", " ").title()
+                on_change="rerun",
+            )
+            if cat_exp.open:
+                with cat_exp:
+                    for issue in cat_issues_filtered:
+                        if issue.count == 0:
+                            continue
+                        badge_color = {"error": "red", "warning": "orange", "opportunity": "blue"}[issue.severity]
+                        badge_icon = {"error": ":material/error:", "warning": ":material/warning:", "opportunity": ":material/info:"}[issue.severity]
+                        label = issue.name.replace("_", " ").title()
 
-                    # Issue header with severity badge
-                    issue_col1, issue_col2 = st.columns([1, 5])
-                    with issue_col1:
-                        st.markdown(f"### {badge}")
-                    with issue_col2:
+                        st.badge(label, icon=badge_icon, color=badge_color)
                         st.markdown(f"**{label}** — {issue.count} URL(s)")
                         st.caption(issue.how_to_fix)
 
-                    # URL list with copy button
-                    with st.expander(f"Show {issue.count} URL(s)", expanded=False):
-                        for idx, u in enumerate(issue.urls[:50]):
-                            url_cols = st.columns([10, 1])
-                            with url_cols[0]:
-                                st.text(u)
-                            with url_cols[1]:
-                                if st.button("📋", key=f"copy_{issue.name}_{idx}", help="Copy URL"):
-                                    st.toast(f"Copied: {u}")
-                        if issue.count > 50:
-                            st.caption(f"... and {issue.count - 50} more")
+                        # URL list with copy button
+                        url_exp = st.expander(f"Show {issue.count} URL(s)", expanded=False, on_change="rerun")
+                        if url_exp.open:
+                            with url_exp:
+                                for idx, u in enumerate(issue.urls[:50]):
+                                    url_cols = st.columns([10, 1])
+                                    with url_cols[0]:
+                                        st.text(u)
+                                    with url_cols[1]:
+                                        if st.button(":material/content_copy:", key=f"copy_{issue.name}_{idx}", help="Copy URL"):
+                                            st.toast(f"Copied: {u}")
+                                if issue.count > 50:
+                                    st.caption(f"... and {issue.count - 50} more")
 
     st.markdown("---")
 
@@ -306,8 +308,9 @@ def page_seo_analysis() -> None:
 
                 if page_issues_list:
                     for issue in page_issues_list:
-                        badge = {"error": "🔴", "warning": "🟡", "opportunity": "🔵"}[issue.severity]
-                        st.markdown(f"{badge} **{issue.name.replace('_', ' ').title()}**")
+                        badge_icon = {"error": ":material/error:", "warning": ":material/warning:", "opportunity": ":material/info:"}[issue.severity]
+                        badge_color = {"error": "red", "warning": "orange", "opportunity": "blue"}[issue.severity]
+                        st.markdown(f":{badge_color}-badge[{badge_icon}] **{issue.name.replace('_', ' ').title()}**")
                         st.caption(issue.how_to_fix)
                 else:
                     st.success("No issues for this page with current filter")
@@ -432,9 +435,11 @@ def page_seo_analysis() -> None:
         if dup_title_groups:
             st.warning(f"{len(dup_title_groups)} duplicate title(s) found")
             for title, urls in list(dup_title_groups.items())[:10]:
-                with st.expander(f'"{title[:60]}..." — {len(urls)} pages'):
-                    for u in urls:
-                        st.text(u)
+                title_exp = st.expander(f'"{title[:60]}..." — {len(urls)} pages')
+                if title_exp.open:
+                    with title_exp:
+                        for u in urls:
+                            st.text(u)
         else:
             st.success("No duplicate titles found.")
 
@@ -448,9 +453,11 @@ def page_seo_analysis() -> None:
         if dup_meta_groups:
             st.warning(f"{len(dup_meta_groups)} duplicate meta description(s) found")
             for desc, urls in list(dup_meta_groups.items())[:10]:
-                with st.expander(f'"{desc[:60]}..." — {len(urls)} pages'):
-                    for u in urls:
-                        st.text(u)
+                desc_exp = st.expander(f'"{desc[:60]}..." — {len(urls)} pages')
+                if desc_exp.open:
+                    with desc_exp:
+                        for u in urls:
+                            st.text(u)
         else:
             st.success("No duplicate meta descriptions found.")
 

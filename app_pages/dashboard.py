@@ -20,12 +20,23 @@ from runners import (
 )
 
 
+@st.dialog("Delete run")
+def _delete_run_dialog(output_dir: str, entry_idx: int):
+    st.write(f"Delete `{output_dir}`? This cannot be undone.")
+    with st.container(horizontal=True):
+        if st.button("Yes, delete", type="primary"):
+            delete_history_entry(entry_idx)
+            st.rerun()
+        if st.button("Cancel"):
+            st.rerun()
+
+
 def _render_metrics(history: list[dict]) -> None:
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Runs", len(history))
-    c2.metric("URLs Crawled", sum(h.get("total", 0) for h in history))
-    c3.metric("Succeeded", sum(h.get("ok", 0) for h in history))
-    c4.metric("Failed", sum(h.get("fail", 0) for h in history))
+    with st.container(horizontal=True):
+        st.metric("Total Runs", len(history), border=True)
+        st.metric("URLs Crawled", sum(h.get("total", 0) for h in history), border=True)
+        st.metric("Succeeded", sum(h.get("ok", 0) for h in history), border=True)
+        st.metric("Failed", sum(h.get("fail", 0) for h in history), border=True)
 
 
 def _build_run_table(history: list[dict], search: str, kind_filter: str) -> pd.DataFrame:
@@ -107,7 +118,7 @@ def _render_run_table(df: pd.DataFrame) -> int | None:
     return None
 
 
-def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], key_prefix: str) -> None:
+def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], key_prefix: str, entry_idx: int = 0) -> None:
     by_collector = get_results(entry)
     output_dir = Path(entry.get("output_dir", ""))
     collectors = entry.get("collectors", list(by_collector.keys()))
@@ -117,16 +128,16 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
     st.markdown("---")
     st.markdown(f"### Run Details — {entry.get('timestamp', '')[:19]}")
 
-    meta_cols = st.columns(4)
-    meta_cols[0].metric("Total URLs", entry.get("total", 0))
-    meta_cols[1].metric("✓ Passed", entry.get("ok", 0))
-    meta_cols[2].metric("✗ Failed", entry.get("fail", 0))
-    meta_cols[3].metric("Collectors", len(available))
+    with st.container(horizontal=True):
+        st.metric("Total URLs", entry.get("total", 0), border=True)
+        st.metric("Passed", entry.get("ok", 0), border=True)
+        st.metric("Failed", entry.get("fail", 0), border=True)
+        st.metric("Collectors", len(available), border=True)
 
     if entry.get("duration"):
         st.caption(f"Duration: {entry['duration']}")
     if entry.get("fast_mode"):
-        st.caption("⚡ Fast mode (curl_cffi)")
+        st.caption(":material/bolt: Fast mode (curl_cffi)")
     if entry.get("extraction_rules"):
         st.caption(f"Extraction rules: {len(entry['extraction_rules'])} fields")
 
@@ -166,8 +177,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
 
     st.markdown("---")
 
-    action_cols = st.columns([2, 2, 1, 1, 1, 3])
-    with action_cols[0]:
+    with st.container(horizontal=True):
         rerun_urls = []
         for kind, rows in selected_rows.items():
             for idx in rows:
@@ -181,7 +191,6 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
             f"Re-run selected ({len(rerun_urls)})",
             disabled=not rerun_urls,
             key=f"{key_prefix}rerun_sel",
-            width="stretch",
             type="primary",
         ):
             st.session_state.capture_urls = rerun_urls
@@ -196,13 +205,11 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
             st.session_state["_newrun_from_dashboard"] = True
             st.rerun()
 
-    with action_cols[1]:
         all_urls = get_urls_from_results(entry)
         if st.button(
             f"Re-capture all ({len(all_urls)})",
             disabled=not all_urls,
             key=f"{key_prefix}recapture",
-            width="stretch",
         ):
             st.session_state.capture_urls = all_urls
             if entry.get("collectors"):
@@ -216,11 +223,9 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
             st.session_state["_newrun_from_dashboard"] = True
             st.rerun()
 
-    with action_cols[2]:
-        if st.button("Delete", key=f"{key_prefix}del", width="stretch", type="secondary"):
-            st.session_state["_dash_delete_confirm"] = entry.get("output_dir", "")
+        if st.button("Delete", key=f"{key_prefix}del", type="secondary"):
+            _delete_run_dialog(entry.get("output_dir", ""), entry_idx)
 
-    with action_cols[3]:
         all_results = [r for rows in by_collector.values() for r in rows]
         has_csv = any(kind in ("seo", "extraction") for kind in by_collector)
         if has_csv and all_results:
@@ -232,30 +237,16 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
             st.download_button(
                 "CSV", data=csv_buf.getvalue().encode(),
                 file_name="results.csv", mime="text/csv",
-                key=f"{key_prefix}dl_csv", width="stretch",
+                key=f"{key_prefix}dl_csv",
             )
 
-    with action_cols[4]:
         has_screenshot = "screenshot" in by_collector and by_collector["screenshot"]
         if has_screenshot:
             st.download_button(
                 "ZIP", data=build_zip(by_collector["screenshot"], output_dir),
                 file_name="screenshots.zip", mime="application/zip",
-                key=f"{key_prefix}dl_zip", width="stretch",
+                key=f"{key_prefix}dl_zip",
             )
-
-    if st.session_state.get("_dash_delete_confirm") == entry.get("output_dir", ""):
-        st.warning(f"Delete `{entry.get('output_dir', '')}`? This cannot be undone.")
-        c_yes, c_no, _ = st.columns([1, 1, 4])
-        with c_yes:
-            if st.button("Yes, delete", type="primary", key=f"{key_prefix}del_yes"):
-                delete_history_entry(load_history().index(entry) if entry in load_history() else 0)
-                st.session_state.pop("_dash_delete_confirm", None)
-                st.rerun()
-        with c_no:
-            if st.button("Cancel", key=f"{key_prefix}del_no"):
-                st.session_state.pop("_dash_delete_confirm", None)
-                st.rerun()
 
     if not available:
         st.info("No collector results in this run.")
@@ -307,10 +298,10 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
     with tabs[-1]:
         total = sum(len(by_collector[c]) for c in available)
         ok = sum(1 for c in available for r in by_collector[c] if r.get("status") == "ok")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total steps", total)
-        c2.metric("OK", ok)
-        c3.metric("Failed", total - ok)
+        with st.container(horizontal=True):
+            st.metric("Total steps", total, border=True)
+            st.metric("OK", ok, border=True)
+            st.metric("Failed", total - ok, border=True)
         st.caption(f"Output: `{output_dir}`")
 
         dl_cols = st.columns(3)
@@ -360,7 +351,7 @@ def page_dashboard() -> None:
     _render_metrics(history)
     st.markdown("---")
 
-    fc1, fc2, fc3, fc4 = st.columns([2, 1, 1, 1])
+    fc1, fc2, fc3 = st.columns([2, 1, 1], gap="small")
     with fc1:
         search = st.text_input("Search", placeholder="Filter by URL...", key="dash_search", label_visibility="collapsed")
     with fc2:
@@ -373,8 +364,6 @@ def page_dashboard() -> None:
             "Project", ["All"] + [p["name"] for p in list_projects()],
             key="dash_project_filter", label_visibility="collapsed",
         )
-    with fc4:
-        st.markdown("")  # spacer
 
     # Filter by project
     if project_filter != "All":
@@ -397,10 +386,5 @@ def page_dashboard() -> None:
         f"`{entry.get('output_dir', '')}`"
     )
 
-    if st.session_state.get("_dash_delete_confirm") == entry.get("output_dir", ""):
-        delete_history_entry(selected_idx)
-        st.session_state.pop("_dash_delete_confirm", None)
-        st.rerun()
-
     selected_rows: dict[str, list[int]] = {}
-    _render_run_detail_drawer(entry, selected_rows, key_prefix=f"dash_{selected_idx}_")
+    _render_run_detail_drawer(entry, selected_rows, key_prefix=f"dash_{selected_idx}_", entry_idx=selected_idx)

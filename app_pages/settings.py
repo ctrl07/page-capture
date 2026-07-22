@@ -13,6 +13,21 @@ from runners import HERE
 CONFIG_PATH = HERE / "config.yaml"
 
 
+@st.dialog("Delete folder")
+def _confirm_delete_folder(folder_path, selected):
+    st.write(f"Delete `{selected}`? This cannot be undone.")
+    with st.container(horizontal=True):
+        if st.button("Yes, delete", type="primary"):
+            try:
+                shutil.rmtree(folder_path)
+                st.success(f"Deleted {selected}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to delete: {e}")
+        if st.button("Cancel"):
+            st.rerun()
+
+
 def _load_config() -> dict:
     with CONFIG_PATH.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -120,29 +135,12 @@ def _render_output_folders() -> None:
 
         with col2:
             if st.button("Delete Folder", type="secondary", key="del_folder"):
-                st.session_state["confirm_delete_folder"] = selected
+                _confirm_delete_folder(folder_path, selected)
 
         with col3:
             # Show folder size
             total_size = sum(f.stat().st_size for f in folder_path.rglob("*") if f.is_file())
             st.metric("Size", f"{total_size / 1024 / 1024:.1f} MB")
-
-        if st.session_state.get("confirm_delete_folder") == selected:
-            st.warning(f"Delete `{selected}`? This cannot be undone.")
-            c_yes, c_no, _ = st.columns([1, 1, 4])
-            with c_yes:
-                if st.button("Yes, delete", type="primary", key="confirm_del_yes"):
-                    try:
-                        shutil.rmtree(folder_path)
-                        st.session_state.pop("confirm_delete_folder", None)
-                        st.success(f"Deleted {selected}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to delete: {e}")
-            with c_no:
-                if st.button("Cancel", key="confirm_del_no"):
-                    st.session_state.pop("confirm_delete_folder", None)
-                    st.rerun()
 
 
 def _render_about() -> None:

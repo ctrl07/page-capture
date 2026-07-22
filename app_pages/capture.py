@@ -60,11 +60,11 @@ def _render_run_complete(runner) -> None:
 
     collectors = getattr(runner, "collectors", [{"name": "seo"}])
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("URLs", len(runner.urls))
-    m2.metric("Passed", ok)
-    m3.metric("Failed", failed)
-    m4.metric("Collectors", len(collectors))
+    with st.container(horizontal=True):
+        st.metric("URLs", len(runner.urls), border=True)
+        st.metric("Passed", ok, border=True)
+        st.metric("Failed", failed, border=True)
+        st.metric("Collectors", len(collectors), border=True)
 
     st.markdown("---")
 
@@ -209,16 +209,16 @@ def _render_url_source_panel() -> list[str]:
 
     if url_count:
         st.success(f"**{url_count}** URL(s) in queue")
-        with st.expander("View URLs", expanded=False):
-            for u in existing_urls[:100]:
-                st.text(u)
-            if url_count > 100:
-                st.caption(f"... and {url_count - 100} more")
-        c1, c2, _ = st.columns([1, 1, 4])
-        with c1:
-            if st.button("Clear queue", key="newrun_clear", width="stretch"):
-                st.session_state.capture_urls = []
-                st.rerun()
+        view_exp = st.expander("View URLs", expanded=False)
+        if view_exp.open:
+            with view_exp:
+                for u in existing_urls[:100]:
+                    st.text(u)
+                if url_count > 100:
+                    st.caption(f"... and {url_count - 100} more")
+        if st.button("Clear queue", key="newrun_clear"):
+            st.session_state.capture_urls = []
+            st.rerun()
     elif not imported_urls:
         st.info("Paste URLs above, or import from a sitemap or WordPress XML.")
 
@@ -230,22 +230,19 @@ def _render_collectors_panel() -> dict[str, bool]:
     collectors = st.session_state.newrun_collectors
 
     st.markdown("**Collectors**")
-    cc1, cc2, cc3 = st.columns(3)
-    with cc1:
-        collectors["screenshot"] = st.checkbox(
+    with st.container(horizontal=True, gap="small"):
+        collectors["screenshot"] = st.toggle(
             "Screenshots",
             value=collectors.get("screenshot", True),
             key="newrun_do_ss",
         )
-    with cc2:
-        collectors["seo"] = st.checkbox(
+        collectors["seo"] = st.toggle(
             "SEO data",
             value=collectors.get("seo", True),
             key="newrun_do_seo",
             help="Title, meta, headings, OG tags, schema, word count, links, alt text.",
         )
-    with cc3:
-        collectors["extraction"] = st.checkbox(
+        collectors["extraction"] = st.toggle(
             "Custom rules",
             value=collectors.get("extraction", False),
             key="newrun_do_ext",
@@ -259,9 +256,10 @@ def _render_collectors_panel() -> dict[str, bool]:
             st.warning("No extraction rules loaded. Go to **Rule Sets** first.")
 
     if collectors["seo"]:
-        with st.expander("Configure SEO fields", expanded=False):
-            seo_fields = render_seo_fields_selector(key_prefix="newrun_seo_fields")
-        st.session_state["newrun_seo_fields_enabled"] = seo_fields
+        seo_exp = st.expander("Configure SEO fields", expanded=False, on_change="rerun")
+        if seo_exp.open:
+            with seo_exp:
+                render_seo_fields_selector(key_prefix="newrun_seo_fields")
     else:
         st.session_state["newrun_seo_fields_enabled"] = get_standard_seo_fields()
 
@@ -323,84 +321,86 @@ def _render_settings_panel() -> tuple[dict, str, bool, dict]:
     # Crawl4AI specific configuration panel
     crawl_config = {}
     if crawl_mode == "crawl4ai":
-        with st.expander("Crawl4AI Configuration", expanded=True):
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                st.number_input(
-                    "Max Depth",
-                    min_value=0,
-                    max_value=10,
-                    value=st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
-                    key="newrun_max_depth",
-                    help="0 = initial URLs only, 1+ = follow links up to N hops",
-                )
-                st.number_input(
-                    "Max Pages",
-                    min_value=1,
-                    max_value=10000,
-                    value=st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
-                    key="newrun_max_pages",
-                    help="Maximum total pages to crawl (safety limit)",
-                )
-                st.checkbox(
-                    "Strip Query Parameters",
-                    value=st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
-                    key="newrun_strip_query_params",
-                    help="Remove URL parameters before deduplication",
-                )
-                st.checkbox(
-                    "Respect Robots.txt",
-                    value=st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
-                    key="newrun_respect_robots_txt",
-                    help="Check and obey robots.txt rules",
-                )
-            with cc2:
-                st.text_area(
-                    "Include Patterns (regex)",
-                    value="\n".join(st.session_state.get("newrun_include_patterns", CONFIG["crawl4ai"]["include_patterns"])),
-                    key="newrun_include_patterns",
-                    help="Only crawl URLs matching these patterns (one per line)",
-                    height=70,
-                )
-                st.text_area(
-                    "Exclude Patterns (regex)",
-                    value="\n".join(st.session_state.get("newrun_exclude_patterns", CONFIG["crawl4ai"]["exclude_patterns"])),
-                    key="newrun_exclude_patterns",
-                    help="Skip URLs matching these patterns (one per line)",
-                    height=70,
-                )
-                st.text_area(
-                    "Allowed Domains",
-                    value="\n".join(st.session_state.get("newrun_allowed_domains", CONFIG["crawl4ai"]["allowed_domains"])),
-                    key="newrun_allowed_domains",
-                    help="Only crawl URLs from these domains (one per line)",
-                    height=70,
-                )
-                st.text_area(
-                    "Blocked Domains",
-                    value="\n".join(st.session_state.get("newrun_blocked_domains", CONFIG["crawl4ai"]["blocked_domains"])),
-                    key="newrun_blocked_domains",
-                    help="Skip URLs from these domains (one per line)",
-                    height=70,
-                )
+        crawl_exp = st.expander("Crawl4AI Configuration", expanded=True, on_change="rerun")
+        if crawl_exp.open:
+            with crawl_exp:
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    st.number_input(
+                        "Max Depth",
+                        min_value=0,
+                        max_value=10,
+                        value=st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
+                        key="newrun_max_depth",
+                        help="0 = initial URLs only, 1+ = follow links up to N hops",
+                    )
+                    st.number_input(
+                        "Max Pages",
+                        min_value=1,
+                        max_value=10000,
+                        value=st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                        key="newrun_max_pages",
+                        help="Maximum total pages to crawl (safety limit)",
+                    )
+                    st.toggle(
+                        "Strip Query Parameters",
+                        value=st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
+                        key="newrun_strip_query_params",
+                        help="Remove URL parameters before deduplication",
+                    )
+                    st.toggle(
+                        "Respect Robots.txt",
+                        value=st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                        key="newrun_respect_robots_txt",
+                        help="Check and obey robots.txt rules",
+                    )
+                with cc2:
+                    st.text_area(
+                        "Include Patterns (regex)",
+                        value="\n".join(st.session_state.get("newrun_include_patterns", CONFIG["crawl4ai"]["include_patterns"])),
+                        key="newrun_include_patterns",
+                        help="Only crawl URLs matching these patterns (one per line)",
+                        height=70,
+                    )
+                    st.text_area(
+                        "Exclude Patterns (regex)",
+                        value="\n".join(st.session_state.get("newrun_exclude_patterns", CONFIG["crawl4ai"]["exclude_patterns"])),
+                        key="newrun_exclude_patterns",
+                        help="Skip URLs matching these patterns (one per line)",
+                        height=70,
+                    )
+                    st.text_area(
+                        "Allowed Domains",
+                        value="\n".join(st.session_state.get("newrun_allowed_domains", CONFIG["crawl4ai"]["allowed_domains"])),
+                        key="newrun_allowed_domains",
+                        help="Only crawl URLs from these domains (one per line)",
+                        height=70,
+                    )
+                    st.text_area(
+                        "Blocked Domains",
+                        value="\n".join(st.session_state.get("newrun_blocked_domains", CONFIG["crawl4ai"]["blocked_domains"])),
+                        key="newrun_blocked_domains",
+                        help="Skip URLs from these domains (one per line)",
+                        height=70,
+                    )
 
-            raw_include = st.session_state.get("newrun_include_patterns", "")
-            raw_exclude = st.session_state.get("newrun_exclude_patterns", "")
-            raw_allowed = st.session_state.get("newrun_allowed_domains", "")
-            raw_blocked = st.session_state.get("newrun_blocked_domains", "")
+                raw_include = st.session_state.get("newrun_include_patterns", "")
+                raw_exclude = st.session_state.get("newrun_exclude_patterns", "")
+                raw_allowed = st.session_state.get("newrun_allowed_domains", "")
+                raw_blocked = st.session_state.get("newrun_blocked_domains", "")
 
-            crawl_config = {
-                "max_depth": st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
-                "max_pages": st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
-                "include_patterns": [p.strip() for p in raw_include.split("\n") if p.strip()] if raw_include else [],
-                "exclude_patterns": [p.strip() for p in raw_exclude.split("\n") if p.strip()] if raw_exclude else [],
-                "strip_query_params": st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
-                "respect_robots_txt": st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
-                "allowed_domains": [d.strip() for d in raw_allowed.split("\n") if d.strip()] if raw_allowed else [],
-                "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
-            }
+                crawl_config = {
+                    "max_depth": st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
+                    "max_pages": st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                    "include_patterns": [p.strip() for p in raw_include.split("\n") if p.strip()] if raw_include else [],
+                    "exclude_patterns": [p.strip() for p in raw_exclude.split("\n") if p.strip()] if raw_exclude else [],
+                    "strip_query_params": st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
+                    "respect_robots_txt": st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                    "allowed_domains": [d.strip() for d in raw_allowed.split("\n") if d.strip()] if raw_allowed else [],
+                    "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
+                }
 
-    generate_pdf = st.checkbox(
+    generate_pdf = st.toggle(
         "Generate PDFs",
         value=st.session_state.get("newrun_generate_pdf", False),
         key="newrun_generate_pdf",

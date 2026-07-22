@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import streamlit as st
 
-from pages.capture import page_new_run
-from pages.dashboard import page_dashboard
-from pages.projects import page_projects
-from pages.rule_sets import page_rule_sets
-from pages.seo_analysis import page_seo_analysis
-from pages.settings import page_settings
+from app_pages.capture import page_new_run
+from app_pages.dashboard import page_dashboard
+from app_pages.projects import page_projects
+from app_pages.rule_sets import page_rule_sets
+from app_pages.seo_analysis import page_seo_analysis
+from app_pages.settings import page_settings
 from state import init_session_state
 
 
