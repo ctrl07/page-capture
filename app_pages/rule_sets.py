@@ -7,9 +7,9 @@ from pathlib import Path
 
 import streamlit as st
 
-from extraction import render_rules_editor
+from extraction import build_extraction_js, render_rules_editor
 from page_capture import load_config
-from runners import HERE, build_runtime_config
+from runners import HERE, PageCapture, build_runtime_config
 from templates import TEMPLATES
 
 CONFIG = load_config(HERE / "config.yaml")
@@ -65,13 +65,67 @@ def _import_rules_json(json_str: str) -> list[dict] | None:
         return None
 
 
+def _test_rules_on_url(rules: list[dict], url: str, runtime_cfg: dict) -> dict | None:
+    """Test extraction rules on a live URL, return extracted data or None on error."""
+    if not rules:
+        return None
+    try:
+        with st.spinner(f"Loading {url}..."):
+            from seleniumbase import SB
+            with SB(uc=True, test=True, headless=False,
+                    window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
+                page = PageCapture(sb, runtime_cfg)
+                page.open(url)
+                page.scroll()
+                sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
+                page.hide_overlays()
+                # Resolve lazy images before extraction
+                page.sb.cdp.evaluate("""
+                (() => {
+                    document.querySelectorAll('img').forEach(img => {
+                        const src = img.getAttribute('src') || '';
+                        if (src && !src.startsWith('data:')) return;
+                        for (const attr of ['data-lazy-src', 'data-src', 'data-original', 'data-pin-media']) {
+                            const val = img.getAttribute(attr);
+                            if (val) { img.setAttribute('src', val); break; }
+                        }
+                        if (!img.getAttribute('src') || img.getAttribute('src').startsWith('data:')) {
+                            const srcset = img.getAttribute('data-lazy-srcset') || img.getAttribute('data-srcset') || img.getAttribute('srcset');
+                            if (srcset) {
+                                let bestUrl = '', bestWidth = -1;
+                                srcset.split(',').forEach(c => {
+                                    const parts = c.trim().split(' ');
+                                    if (parts.length >= 2 && parts[1].endsWith('w')) {
+                                        const w = parseInt(parts[1], 10);
+                                        if (w > bestWidth) { bestWidth = w; bestUrl = parts[0]; }
+                                    }
+                                });
+                                if (bestUrl) img.setAttribute('src', bestUrl);
+                            }
+                        }
+                        for (const attr of ['data-lazy-src', 'data-src', 'data-original', 'data-pin-media',
+                                             'data-lazy-srcset', 'data-srcset', 'data-load-done', 'data-ssr-src-done']) {
+                            img.removeAttribute(attr);
+                        }
+                    });
+                })()
+                """)
+                # Build and run extraction JS
+                js = build_extraction_js(rules)
+                result = page.sb.cdp.evaluate(js)
+                return result
+    except Exception as e:
+        st.error(f"Test failed: {e}")
+        return None
+
+
 def page_rule_sets() -> None:
     st.subheader("Rule Sets")
     st.caption("Define custom CSS selector rules to extract data from pages. Use templates for common patterns.")
 
     runtime_cfg = build_runtime_config(CONFIG, CONFIG["viewport"], CONFIG["timing"]["stabilization_ms"])
 
-    tabs = st.tabs(["Editor", "Templates", "Import/Export"])
+    tabs = st.tabs(["Editor", "Templates", "Import/Export", "Test Rules"])
 
     with tabs[0]:
         st.markdown("### Rule Editor")
@@ -176,3 +230,55 @@ def page_rule_sets() -> None:
                         st.rerun()
                 else:
                     st.error("Invalid JSON format")
+
+    with tabs[3]:
+        st.markdown("### Test Rules on Live URL")
+        st.caption("Enter a URL to test your current extraction rules against a real page.")
+
+        rules = st.session_state.get("extraction_rules", [])
+        if not rules:
+            st.warning("No rules defined. Add rules in the **Editor** tab first.")
+        else:
+            st.success(f"{len(rules)} rule(s) ready to test")
+
+            test_url = st.text_input(
+                "URL to test",
+                placeholder="https://example.com/page-to-test",
+                key="rule_test_url",
+            )
+
+            if test_url and st.button("Run Test", key="run_rule_test", type="primary", width="stretch"):
+                result = _test_rules_on_url(rules, test_url, runtime_cfg)
+                if result:
+                    st.markdown("---")
+                    st.markdown("#### Test Results")
+
+                    # Summary metrics
+                    total_fields = len(result)
+                    filled_fields = sum(1 for v in result.values() if v)
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Total Fields", total_fields)
+                    c2.metric("Extracted", filled_fields)
+                    c3.metric("Empty", total_fields - filled_fields)
+
+                    # Results table
+                    st.markdown("**Extracted Data**")
+                    for name, value in result.items():
+                        rule = next((r for r in rules if r.get("name") == name), {})
+                        rtype = rule.get("type", "text")
+                        with st.expander(f"{name} ({rtype})", expanded=bool(value)):
+                            if isinstance(value, list):
+                                st.json(value)
+                            elif isinstance(value, str) and len(value) > 500:
+                                st.text_area("Value", value=value, height=200, key=f"test_result_{name}")
+                            else:
+                                st.code(value if value else "(empty)")
+
+                    # Raw JSON download
+                    st.download_button(
+                        "Download Results (JSON)",
+                        data=json.dumps(result, indent=2),
+                        file_name="test_results.json",
+                        mime="application/json",
+                        key="dl_test_results",
+                    )
