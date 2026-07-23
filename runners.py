@@ -1685,12 +1685,34 @@ class BlogAuditRunner:
         issues = []
         if "\ufffd" in text:
             issues.append("Contains replacement character (�)")
-        if "\u2013" in text or "\u2014" in text:
-            pass  # en-dash / em-dash is fine
+        # Commonly acceptable Unicode punctuation and symbols
+        allowed_chars = set(
+            "\u2013\u2014"      # en-dash, em-dash
+            "\u2018\u2019"      # left/right single quotes
+            "\u201c\u201d"      # left/right double quotes
+            "\u2026"            # horizontal ellipsis
+            "\u00a0"            # non-breaking space
+            "\u00a9\u00ae\u2122"  # © ® ™
+            "\u2022"            # bullet
+            "\u2039\u203a"      # single angle quotes
+            "\u00ab\u00bb"      # double angle quotes
+            "\u201e\u201f"      # low-9 / high-reversed-9 quotes
+            "\u2030"            # per mille
+            "\u2032\u2033"      # prime, double prime
+            "\u2044"            # fraction slash
+            "\u20ac\u20a1\u20a2\u20a3\u20a4\u20a5\u20a6\u20a7\u20a8\u20a9\u20aa\u20ab\u20ac\u20ad\u20ae\u20af\u20b0\u20b1\u20b2\u20b3\u20b4\u20b5\u20b6\u20b7\u20b8\u20b9\u20ba\u20bb\u20bc\u20bd\u20be\u20bf"  # currency symbols
+            "\u00a1\u00a2\u00a3\u00a4\u00a5\u00a6\u00a7\u00a8\u00aa\u00ab\u00ac\u00ad\u00ae\u00af"  # ¡ ¢ £ ¤ ¥ ¦ § ¨ © ª « ¬ ® ¯
+            "\u00b0\u00b1\u00b2\u00b3\u00b4\u00b5\u00b6\u00b7\u00b8\u00b9\u00ba\u00bb\u00bc\u00bd\u00be\u00bf"  # ° ± ² ³ ´ µ ¶ · ¸ ¹ º » ¼ ½ ¾ ¿
+            "\u00c0\u00c1\u00c2\u00c3\u00c4\u00c5\u00c6\u00c7\u00c8\u00c9\u00ca\u00cb\u00cc\u00cd\u00ce\u00cf"  # À Á Â Ã Ä Å Æ Ç È É Ê Ë Ì Í Î Ï
+            "\u00d0\u00d1\u00d2\u00d3\u00d4\u00d5\u00d6\u00d7\u00d8\u00d9\u00da\u00db\u00dc\u00dd\u00de\u00df"  # Ð Ñ Ò Ó Ô Õ Ö × Ø Ù Ú Û Ü Ý Þ ß
+            "\u00e0\u00e1\u00e2\u00e3\u00e4\u00e5\u00e6\u00e7\u00e8\u00e9\u00ea\u00eb\u00ec\u00ed\u00ee\u00ef"  # à á â ã ä å æ ç è é ê ë ì í î ï
+            "\u00f0\u00f1\u00f2\u00f3\u00f4\u00f5\u00f6\u00f7\u00f8\u00f9\u00fa\u00fb\u00fc\u00fd\u00fe\u00ff"  # ð ñ ò ó ô õ ö ÷ ø ù ú û ü ý þ ÿ
+        )
         for ch in text:
-            if ord(ch) > 127 and ch not in "\u2013\u2014\u2018\u2019\u201c\u201d\u2026\u00a0\u00e9\u00e8\u00ea\u00eb\u00f1\u00fc\u00f6\u00e4\u00df\u00b0":
-                if ord(ch) < 160:
-                    issues.append(f"Unicode issue: char U+{ord(ch):04X} found")
+            code = ord(ch)
+            if code > 127 and ch not in allowed_chars:
+                # Report any non-ASCII character not in the allowed list
+                issues.append(f"Unicode issue: char U+{code:04X} found ('{ch}')")
         return issues
 
     def _check_image_localization(self, images: list[str], target_domain: str) -> list[str]:

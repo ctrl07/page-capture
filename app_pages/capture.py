@@ -312,6 +312,11 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
 
     # Crawl4AI specific configuration panel
     crawl_config = {}
+    fast_config = {}
+
+    # Get seed URLs once for all modes (used for scope estimation)
+    seed_urls = st.session_state.get("capture_urls", [])
+
     if crawl_mode == "crawl4ai":
         with st.container(border=True):
             st.markdown("**Crawl Settings**")
@@ -393,7 +398,6 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
                 )
 
             with cc2:
-                seed_urls = st.session_state.get("capture_urls", [])
                 if seed_urls:
                     from urllib.parse import urlparse as _urlparse
                     detected = set()
