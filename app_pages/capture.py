@@ -1,10 +1,12 @@
-"""Page Capture — New capture workflow with split layout."""
+"""Page Capture — New capture workflow with 4-step wizard."""
+
 from __future__ import annotations
 
 import csv
 import io
 import re
 from datetime import datetime
+from multiprocessing import cpu_count
 
 import streamlit as st
 
@@ -57,6 +59,24 @@ CRAWL_PRESETS = {
         "allowed_domains": "", "blocked_domains": "",
     },
 }
+
+
+def _smart_crawl_mode(urls: list[str]) -> str:
+    """Auto-select crawl mode based on URL count."""
+    if len(urls) <= 10:
+        return "fast"
+    # For many URLs, default to crawl4ai if depth > 0 will be used
+    return "unified"
+
+
+def _smart_fast_workers() -> int:
+    """Auto-detect optimal worker count."""
+    return min(8, max(4, cpu_count()))
+
+
+def _smart_output_name() -> str:
+    """Generate smart output folder name."""
+    return f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
 def _render_active_run() -> None:
@@ -141,8 +161,8 @@ def _render_run_complete(runner) -> None:
         st.markdown("---")
         st.markdown("**SEO Analysis**")
         st.caption("Run a full SEO health check on these results.")
-        if st.button("Open SEO Analysis", key="newrun_open_analysis", type="secondary", width="stretch"):
-            st.session_state["_navigate_to_seo_analysis"] = True
+        if st.button("Open SEO Health", key="newrun_open_analysis", type="secondary", width="stretch"):
+            st.session_state["_navigate_to_seo_health"] = True
             st.rerun()
 
     st.caption(f"Output saved to: `{runner.output_dir}`")
@@ -157,8 +177,9 @@ def _render_run_complete(runner) -> None:
         st.rerun()
 
 
-def _render_url_source_panel() -> list[str]:
-    """Render URL input panel, return list of imported URLs."""
+def _step_1_urls() -> list[str]:
+    """Step 1: URL input."""
+    st.markdown("### Step 1: URLs to Capture")
     existing_urls = st.session_state.get("capture_urls") or []
     url_count = len(existing_urls)
 
@@ -240,8 +261,9 @@ def _render_url_source_panel() -> list[str]:
     return existing_urls
 
 
-def _render_collectors_panel() -> dict[str, bool]:
-    """Render collector toggles for SEO and Custom Rules."""
+def _step_2_collectors() -> dict[str, bool]:
+    """Step 2: Collector selection."""
+    st.markdown("### Step 2: Collectors")
     collectors = st.session_state.newrun_collectors
 
     tc1, tc2 = st.columns(2)
@@ -267,7 +289,7 @@ def _render_collectors_panel() -> dict[str, bool]:
             st.warning("No extraction rules loaded. Go to **Rule Sets** first.")
 
     if collectors["seo"]:
-        seo_exp = st.expander("Configure SEO fields", expanded=False, on_change="rerun")
+        seo_exp = st.expander("Configure SEO fields", expanded=False)
         if seo_exp.open:
             with seo_exp:
                 render_seo_fields_selector(key_prefix="newrun_seo_fields")
@@ -277,51 +299,35 @@ def _render_collectors_panel() -> dict[str, bool]:
     return collectors
 
 
-def _render_settings_panel() -> tuple[dict, str, dict, dict]:
-    """Render settings panel, return (viewport, crawl_mode, crawl_config, fast_config)."""
-    st.markdown("**Settings**")
-    s1, s2 = st.columns(2)
-    with s1:
-        st.metric("Width", CONFIG["viewport"]["width"])
-        st.number_input(
-            "Delay (s)",
-            value=CONFIG["timing"]["stabilization_ms"] / 1000,
-            min_value=0.0,
-            max_value=60.0,
-            key="newrun_delay",
-        )
-    with s2:
-        st.metric("Height", CONFIG["viewport"]["height"])
-        output_name = st.text_input(
-            "Folder name",
-            value=st.session_state.newrun_output,
-            key="newrun_output_name",
-        )
-        st.session_state.newrun_output = output_name
+def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
+    """Step 3: Crawl mode selection with smart default."""
+    st.markdown("### Step 3: Crawl Mode")
+
+    # Smart default
+    default_mode = st.session_state.get("newrun_crawl_mode") or _smart_crawl_mode(urls)
 
     crawl_mode = st.segmented_control(
-        "Crawl mode",
+        "Mode",
         options=["unified", "fast", "crawl4ai"],
-        default=st.session_state.get("newrun_crawl_mode", "fast"),
+        default=default_mode,
         key="newrun_crawl_mode",
         format_func=lambda x: {"unified": "Normal", "fast": "Fast", "crawl4ai": "Crawl4AI"}[x],
-        help="Normal: SeleniumBase (SEO + extraction)\n"
-             "Fast (default): curl_cffi (SEO only, 8 concurrent)\n"
-             "Crawl4AI: Playwright async (SEO only, structured output)",
+        help=(
+            "Normal: SeleniumBase (SEO + extraction, browser-rendered)\n"
+            "Fast: curl_cffi (SEO only, 8 concurrent, no JS)\n"
+            "Crawl4AI: Playwright async (deep crawl, structured output)"
+        ),
     ) or "fast"
 
-    # Crawl4AI specific configuration panel
     crawl_config = {}
     fast_config = {}
 
-    # Get seed URLs once for all modes (used for scope estimation)
-    seed_urls = st.session_state.get("capture_urls", [])
-
+    # Crawl4AI specific configuration
     if crawl_mode == "crawl4ai":
         with st.container(border=True):
             st.markdown("**Crawl Settings**")
 
-            # ── Quick Setup ──
+            # Quick Setup
             preset_names = list(CRAWL_PRESETS.keys())
             preset = st.selectbox(
                 "Quick setup (you can still customize below):",
@@ -336,7 +342,7 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
                 st.session_state.pop("newrun_crawl_preset", None)
                 st.rerun()
 
-            # ── Settings Grid ──
+            # Settings Grid
             cc1, cc2 = st.columns(2)
             with cc1:
                 depth = st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"])
@@ -398,10 +404,10 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
                 )
 
             with cc2:
-                if seed_urls:
+                if urls:
                     from urllib.parse import urlparse as _urlparse
                     detected = set()
-                    for u in seed_urls:
+                    for u in urls:
                         try:
                             detected.add(_urlparse(u).netloc)
                         except Exception:
@@ -431,12 +437,13 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
                 if not raw_allowed.strip() and depth > 0:
                     st.info("ℹ️ We'll automatically stay on the same website(s) as your starting URLs.")
 
-            # ── Scope Estimate ──
+            # Scope Estimate
             st.markdown("---")
-            url_count = len(seed_urls)
+            url_count = len(urls)
             if url_count == 0:
-                st.info("Add URLs above to see an estimate of how many pages will be scanned.")
+                st.info("Add URLs in Step 1 to see an estimate of how many pages will be scanned.")
             else:
+                depth = st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"])
                 if depth == 0:
                     estimated = url_count
                 elif depth == 1:
@@ -474,8 +481,7 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
                 "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
             }
 
-    # Fast mode specific configuration panel
-    fast_config = {}
+    # Fast mode specific configuration
     if crawl_mode == "fast":
         with st.container(border=True):
             st.markdown("**Fast Mode Settings**")
@@ -484,7 +490,8 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
             with fc1:
                 st.number_input(
                     "🔁 Max retries",
-                    min_value=0, max_value=10, value=st.session_state.get("newrun_max_retries", CONFIG["fast"]["max_retries"]),
+                    min_value=0, max_value=10,
+                    value=st.session_state.get("newrun_max_retries", CONFIG["fast"]["max_retries"]),
                     key="newrun_max_retries",
                     help="Number of retry attempts for failed URLs (rate limits, server errors)."
                 )
@@ -497,13 +504,15 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
             with fc2:
                 st.number_input(
                     "⚡ Max concurrent workers",
-                    min_value=1, max_value=32, value=st.session_state.get("newrun_max_workers", CONFIG["fast"]["max_workers"]),
+                    min_value=1, max_value=32,
+                    value=st.session_state.get("newrun_max_workers", _smart_fast_workers()),
                     key="newrun_max_workers",
                     help="Maximum number of concurrent requests."
                 )
                 st.number_input(
                     "⏱️ Request timeout (seconds)",
-                    min_value=5, max_value=120, value=st.session_state.get("newrun_timeout", CONFIG["fast"]["timeout"]),
+                    min_value=5, max_value=120,
+                    value=st.session_state.get("newrun_timeout", CONFIG["fast"]["timeout"]),
                     key="newrun_timeout",
                     help="Timeout for each HTTP request in seconds."
                 )
@@ -512,12 +521,119 @@ def _render_settings_panel() -> tuple[dict, str, dict, dict]:
             fast_config = {
                 "max_retries": st.session_state.get("newrun_max_retries", CONFIG["fast"]["max_retries"]),
                 "retry_on_status": [int(x.strip()) for x in raw_retry.split(",") if x.strip().isdigit()] if raw_retry else [],
-                "max_workers": st.session_state.get("newrun_max_workers", CONFIG["fast"]["max_workers"]),
+                "max_workers": st.session_state.get("newrun_max_workers", _smart_fast_workers()),
                 "timeout": st.session_state.get("newrun_timeout", CONFIG["fast"]["timeout"]),
             }
 
-    viewport = {"width": int(CONFIG["viewport"]["width"]), "height": int(CONFIG["viewport"]["height"])}
-    return viewport, crawl_mode, crawl_config, fast_config
+    # Show smart default badge
+    if crawl_mode == "fast":
+        st.caption(":material/bolt: Fast mode — SEO only, no JavaScript rendering")
+    elif crawl_mode == "crawl4ai":
+        st.caption(":material/psychology: Crawl4AI — deep crawl, async, structured output")
+    else:
+        st.caption(":material/desktop_windows: Normal mode — full browser, SEO + extraction")
+
+    return crawl_mode, crawl_config, fast_config
+
+
+def _step_4_advanced() -> dict:
+    """Step 4: Advanced settings (collapsible)."""
+    st.markdown("### Step 4: Advanced Settings")
+
+    with st.expander("Viewport & Timing", expanded=False):
+        s1, s2 = st.columns(2)
+        with s1:
+            st.metric("Width", CONFIG["viewport"]["width"])
+            st.number_input(
+                "Stabilization (ms)",
+                value=CONFIG["timing"]["stabilization_ms"],
+                min_value=500,
+                max_value=10000,
+                step=100,
+                key="newrun_stabilization",
+                help="Wait time after scroll before capture",
+            )
+            st.number_input(
+                "Inter-page delay min (s)",
+                value=CONFIG["timing"]["inter_page_delay_min"],
+                min_value=0.0,
+                max_value=10.0,
+                key="newrun_min_delay",
+                help="Minimum random delay between pages",
+            )
+        with s2:
+            st.metric("Height", CONFIG["viewport"]["height"])
+            st.number_input(
+                "Scroll interval (ms)",
+                value=CONFIG["timing"]["scroll_interval_ms"],
+                min_value=100,
+                max_value=5000,
+                key="newrun_scroll_interval",
+                help="Delay between scroll steps",
+            )
+            st.number_input(
+                "Inter-page delay max (s)",
+                value=CONFIG["timing"]["inter_page_delay_max"],
+                min_value=0.0,
+                max_value=10.0,
+                key="newrun_max_delay",
+                help="Maximum random delay between pages",
+            )
+
+    with st.expander("Network Idle (scroll wait)", expanded=False):
+        st.toggle(
+            "Wait for network idle",
+            value=CONFIG["timing"]["scroll_wait_for_idle"],
+            key="newrun_wait_idle",
+            help="Poll for pending fetch/XHR + image loads before advancing scroll",
+        )
+        st.number_input(
+            "Idle timeout (ms)",
+            value=CONFIG["timing"]["scroll_idle_timeout_ms"],
+            min_value=1000,
+            max_value=30000,
+            key="newrun_idle_timeout",
+        )
+        st.number_input(
+            "Poll interval (ms)",
+            value=CONFIG["timing"]["scroll_idle_poll_ms"],
+            min_value=50,
+            max_value=1000,
+            key="newrun_idle_poll",
+        )
+
+    with st.expander("Overlay Hiding", expanded=False):
+        st.toggle(
+            "Auto-hide cookie banners, chat, modals",
+            value=True,
+            key="newrun_hide_overlays",
+        )
+        st.caption("Uses built-in selectors for common overlays")
+
+    with st.expander("Trafilatura (content extraction)", expanded=False):
+        st.toggle(
+            "Enable trafilatura",
+            value=CONFIG.get("trafilatura", {}).get("enabled", True),
+            key="newrun_trafilatura_enabled",
+        )
+        st.selectbox(
+            "Output format",
+            ["txt", "markdown", "json", "xml", "xmltei", "csv", "html"],
+            index=0,
+            key="newrun_trafilatura_format",
+        )
+        st.toggle("Include tables", value=True, key="newrun_trafilatura_tables")
+        st.toggle("Favor precision", value=True, key="newrun_trafilatura_precision")
+
+    with st.expander("Output", expanded=False):
+        output_name = st.text_input(
+            "Folder name",
+            value=st.session_state.newrun_output,
+            key="newrun_output_name",
+        )
+        st.session_state.newrun_output = output_name
+
+    return {}
 
 
 def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], crawl_config: dict | None = None, fast_config: dict | None = None) -> None:
@@ -528,16 +644,16 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], cr
 
     reasons = []
     if not existing_urls:
-        reasons.append("add URLs")
+        reasons.append("add URLs in Step 1")
     if not active_collectors:
-        reasons.append("select a collector")
+        reasons.append("select a collector in Step 2")
     if collectors.get("extraction") and not st.session_state.get("extraction_rules"):
-        reasons.append("load extraction rules")
+        reasons.append("load extraction rules in Rule Sets")
 
     if reasons:
         st.caption(f"To start: {', '.join(reasons)}")
 
-    crawl_mode = st.session_state.get("newrun_crawl_mode", "unified")
+    crawl_mode = st.session_state.get("newrun_crawl_mode", "fast")
 
     if st.button(
         "Start Capture",
@@ -552,7 +668,7 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], cr
         runtime_cfg = build_runtime_config(
             CONFIG,
             viewport={"width": int(CONFIG["viewport"]["width"]), "height": int(CONFIG["viewport"]["height"])},
-            stabilization_ms=int(st.session_state.newrun_delay * 1000),
+            stabilization_ms=int(st.session_state.get("newrun_stabilization", CONFIG["timing"]["stabilization_ms"])),
         )
 
         if crawl_mode == "crawl4ai":
@@ -596,19 +712,19 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], cr
         st.rerun()
 
 
-def page_new_run() -> None:
+def page_new_capture() -> None:
     st.subheader("New Capture")
 
     for key, default in [
         ("newrun_collectors", {"seo": True, "extraction": False}),
-        ("newrun_output", f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"),
+        ("newrun_output", _smart_output_name()),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
 
-    if st.session_state.get("_newrun_from_dashboard"):
+    if st.session_state.get("_newrun_from_history"):
         st.session_state.pop("newrun_just_finished", None)
-        st.session_state.pop("_newrun_from_dashboard", None)
+        st.session_state.pop("_newrun_from_history", None)
         restore = st.session_state.pop("restore_collectors", None)
         if restore and isinstance(restore, list):
             collectors_dict = st.session_state.newrun_collectors
@@ -638,21 +754,49 @@ def page_new_run() -> None:
         _render_run_complete(runner)
         return
 
-    left, right = st.columns([1, 1], gap="large")
+    # 4-step vertical wizard
+    st.markdown("---")
 
-    with left:
-        with st.container(border=True):
-            st.markdown("### URLs")
-            existing_urls = _render_url_source_panel()
+    # Step 1: URLs
+    with st.container(border=True):
+        urls = _step_1_urls()
 
-    with right:
-        with st.container(border=True):
-            st.markdown("### Collectors")
-            _render_collectors_panel()
+    st.markdown("")
 
-            st.markdown("---")
-            st.markdown("### Settings")
-            viewport, crawl_mode, crawl_config, fast_config = _render_settings_panel()
+    # Step 2: Collectors
+    with st.container(border=True):
+        collectors = _step_2_collectors()
 
-            st.markdown("---")
-            _render_run_button(existing_urls, st.session_state.newrun_collectors, crawl_config, fast_config)
+    st.markdown("")
+
+    # Step 3: Crawl Mode
+    with st.container(border=True):
+        crawl_mode, crawl_config, fast_config = _step_3_crawl_mode(urls)
+
+    st.markdown("")
+
+    # Step 4: Advanced (collapsible)
+    with st.container(border=True):
+        _step_4_advanced()
+
+    st.markdown("---")
+
+    # Primary action
+    _render_run_button(urls, collectors, crawl_config, fast_config)
+
+    st.markdown("")
+
+    # Secondary actions
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Save as Template", key="newrun_save_template", width="stretch"):
+            st.toast("Template saving coming soon")
+    with c2:
+        if st.button("Load Template", key="newrun_load_template", width="stretch"):
+            st.toast("Template loading coming soon")
+    with c3:
+        if st.button("Reset Form", key="newrun_reset", width="stretch"):
+            for key in list(st.session_state.keys()):
+                if key.startswith("newrun_"):
+                    del st.session_state[key]
+            st.rerun()

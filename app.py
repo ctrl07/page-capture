@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app_pages.blog_audit import page_blog_audit
-from app_pages.capture import page_new_run
-from app_pages.dashboard import page_dashboard
+from app_pages.capture import page_new_capture
+from app_pages.content import page_content
+from app_pages.history import page_history
 from app_pages.projects import page_projects
 from app_pages.rule_sets import page_rule_sets
-from app_pages.seo_analysis import page_seo_analysis
+from app_pages.seo_health import page_seo_health
 from app_pages.settings import page_settings
 from state import init_session_state
 
@@ -43,13 +43,13 @@ def main() -> None:
 
         pages = {
             "Capture": [
-                st.Page(page_new_run, title="Capture", icon=":material/rocket_launch:", default=True),
-                st.Page(page_dashboard, title="Dashboard", icon=":material/dashboard:"),
+                st.Page(page_new_capture, title="New Capture", icon=":material/rocket_launch:", default=True),
+                st.Page(page_history, title="History", icon=":material/history:"),
             ],
-            "Tools": [
+            "Analyze": [
+                st.Page(page_seo_health, title="SEO Health", icon=":material/analytics:"),
+                st.Page(page_content, title="Content", icon=":material/article:"),
                 st.Page(page_rule_sets, title="Rule Sets", icon=":material/tune:"),
-                st.Page(page_seo_analysis, title="SEO Analysis", icon=":material/analytics:"),
-                st.Page(page_blog_audit, title="Blog Audit", icon=":material/article:"),
             ],
             "Library": [
                 st.Page(page_projects, title="Projects", icon=":material/folder:"),

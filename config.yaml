@@ -204,3 +204,52 @@ fast:
   retry_on_status: "429,500,502,503,504"  # HTTP status codes to retry (comma-separated)
   max_workers: 8              # Maximum concurrent workers
   timeout: 30                 # Request timeout in seconds
+
+trafilatura:
+  # Trafilatura content extraction configuration (used by Fast crawl)
+  enabled: true               # Enable trafilatura extraction
+  output_format: "txt"        # Output format: "txt", "markdown", "json", "xml", "xmltei", "csv", "html"
+  include_comments: false     # Include comments in extraction
+  include_tables: true        # Include tables in extraction
+  include_images: false       # Include images in extraction
+  include_formatting: false   # Keep formatting elements (only for XML output)
+  include_links: false        # Keep links in extraction
+  favor_precision: true       # Prefer less text but correct extraction
+  favor_recall: false         # Prefer more text when uncertain
+  target_language: "en"       # Target language filter (ISO 639-1, empty = all)
+  deduplicate: false          # Remove duplicate segments
+  with_metadata: true         # Include metadata in output
+  only_with_metadata: false   # Only return if all metadata present
+  max_tree_size: null         # Maximum DOM tree size (null = no limit)
+  fast: false                 # Use faster heuristic, skip fallback extraction
+  # Author blacklist - filter out generic author names
+  author_blacklist:
+    - "Admin"
+    - "Editor"
+    - "Author"
+    - "Staff"
+    - "Team"
+    - "Anonymous"
+  # XPaths to remove before extraction (boilerplate removal)
+  prune_xpath:
+    - "//nav"
+    - "//aside"
+    - "//footer"
+    - "//header"
+    - ".cookie-banner"
+    - ".cookie-consent"
+    - "#cookie-notice"
+    - "[id*='cookie']"
+    - "[class*='cookie']"
+    - ".sidebar"
+    - ".advertisement"
+    - "[class*='ads']"
+    - "[class*='banner']"
+    - "[class*='popup']"
+    - "[class*='modal']"
+    - "[class*='overlay']"
+  # htmldate configuration for date extraction
+  date_extraction_params:
+    extensive_search: true    # Extensive search for dates
+    max_date: null            # Maximum date filter (YYYY-MM-DD or null)
+    min_date: null            # Minimum date filter (YYYY-MM-DD or null)

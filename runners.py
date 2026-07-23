@@ -612,6 +612,7 @@ def _fetch_and_extract(
     cookies: list[dict],
     user_agent: str,
     timeout: float = 30.0,
+    trafilatura_cfg: dict | None = None,
 ) -> dict:
     """Fetch one URL with curl_cffi (Chrome TLS impersonation) and extract SEO data.
 
@@ -620,6 +621,7 @@ def _fetch_and_extract(
         cookies: List of cookie dicts with name, value, domain, path, secure, httpOnly
         user_agent: User-Agent string
         timeout: Request timeout in seconds
+        trafilatura_cfg: Optional dict with trafilatura configuration options
 
     Returns:
         Result dict with SEO data, including final_url after redirects
@@ -721,6 +723,87 @@ def _fetch_and_extract(
     missing = sum(1 for img in imgs if not (img.attrib.get("alt", "") or "").strip())
     data["images_missing_alt"] = missing
 
+    # Trafilatura extraction (main content + metadata)
+    tf_cfg = trafilatura_cfg or {}
+    if tf_cfg.get("enabled", True):
+        try:
+            import trafilatura
+
+            # Use bare_extraction for full control and single-call extraction
+            # Build date extraction params
+            date_params = {}
+            if tf_cfg.get("date_extraction_params"):
+                date_params = tf_cfg["date_extraction_params"]
+            else:
+                if tf_cfg.get("extensive_date_search"):
+                    date_params["extensive_search"] = True
+                if tf_cfg.get("max_date"):
+                    date_params["max_date"] = tf_cfg["max_date"]
+                if tf_cfg.get("min_date"):
+                    date_params["min_date"] = tf_cfg["min_date"]
+
+            result = trafilatura.bare_extraction(
+                resp.text,
+                url=url,
+                fast=tf_cfg.get("fast", False),
+                favor_precision=tf_cfg.get("favor_precision", True),
+                favor_recall=tf_cfg.get("favor_recall", False),
+                include_comments=tf_cfg.get("include_comments", False),
+                output_format=tf_cfg.get("output_format", "txt"),
+                target_language=tf_cfg.get("target_language") or None,
+                include_tables=tf_cfg.get("include_tables", True),
+                include_images=tf_cfg.get("include_images", False),
+                include_formatting=tf_cfg.get("include_formatting", False),
+                include_links=tf_cfg.get("include_links", False),
+                deduplicate=tf_cfg.get("deduplicate", False),
+                date_extraction_params=date_params if date_params else None,
+                with_metadata=tf_cfg.get("with_metadata", True),
+                only_with_metadata=tf_cfg.get("only_with_metadata", False),
+                max_tree_size=tf_cfg.get("max_tree_size"),
+                url_blacklist=set(tf_cfg["url_blacklist"]) if tf_cfg.get("url_blacklist") else None,
+                author_blacklist=set(tf_cfg["author_blacklist"]) if tf_cfg.get("author_blacklist") else None,
+                prune_xpath=tf_cfg.get("prune_xpath"),
+            )
+
+            if result:
+                # bare_extraction returns a Document object with as_dict() method
+                if hasattr(result, "as_dict"):
+                    result_dict: dict = result.as_dict()  # type: ignore[attr-defined]
+                else:
+                    result_dict = result  # type: ignore[assignment]
+
+                # Metadata fields
+                data["author"] = str(result_dict.get("author") or "")
+                data["publish_date"] = str(result_dict.get("date") or "")
+                data["sitename"] = str(result_dict.get("sitename") or "")
+                categories = result_dict.get("categories") or []
+                data["categories"] = " | ".join(categories) if categories else ""
+                tags = result_dict.get("tags") or []
+                data["tags"] = " | ".join(tags) if tags else ""
+                data["metadata_language"] = str(result_dict.get("language") or "")
+                data["metadata_hostname"] = str(result_dict.get("hostname") or "")
+                data["title_trafilatura"] = str(result_dict.get("title") or "")
+                data["url_trafilatura"] = str(result_dict.get("url") or "")
+                data["fingerprint"] = str(result_dict.get("fingerprint") or "")
+
+                # Main content
+                main_content = str(result_dict.get("text") or result_dict.get("raw_text") or "")
+                data["main_content"] = main_content
+                data["main_content_word_count"] = len(main_content.split()) if main_content else 0
+
+                # Optional: include formatted output if not txt
+                if tf_cfg.get("output_format", "txt") != "txt":
+                    formatted = result_dict.get("formatted")
+                    if formatted:
+                        data["main_content_formatted"] = str(formatted)
+
+        except ImportError:
+            # trafilatura not installed, skip
+            pass
+        except Exception:
+            # Any other error, skip trafilatura but don't fail the whole extraction
+            pass
+
     # Soft-block detection: sites sometimes return 200 with a challenge/block page.
     # (Hard blocks via non-200 are already caught above by status_code != 200.)
     _BLOCK_MARKERS = (
@@ -806,10 +889,11 @@ class FastRunnerLegacy:
             return []
         items: list[dict] = []
         max_workers = min(self.max_workers, len(urls))
+        trafilatura_cfg = self.runtime_cfg.get("trafilatura", {})
 
         def _crawl_one(url: str) -> dict:
             try:
-                return _fetch_and_extract(url, cookies, user_agent, self.timeout)
+                return _fetch_and_extract(url, cookies, user_agent, self.timeout, trafilatura_cfg)
             except Exception as exc:
                 return {"url": url, "status": f"error: {exc}"}
 

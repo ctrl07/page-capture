@@ -1,4 +1,4 @@
-"""Dashboard — run management, preview, and re-queue."""
+"""History page — run management, preview, and re-queue."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def _render_run_table(df: pd.DataFrame) -> int | None:
         column_order=["timestamp", "kind", "urls", "ok", "fail", "success_rate", "duration", "output_dir"],
         on_select="rerun",
         selection_mode="single-row",
-        key="dash_run_table",
+        key="hist_run_table",
     )
 
     sel_rows = getattr(event, "selection", None)
@@ -160,7 +160,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
         proj_names = ["(None)"] + [p["name"] for p in projects]
         selected = st.selectbox(
             "Add to project", proj_names,
-            key=f"dash_proj_add_{entry_idx}",
+            key=f"hist_proj_add_{entry_idx}",
             label_visibility="collapsed",
         )
         if selected and selected != "(None)":
@@ -170,7 +170,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 st.rerun()
 
         if current_project_ids:
-            if st.button("Remove from current project", key=f"dash_proj_rm_{entry_idx}"):
+            if st.button("Remove from current project", key=f"hist_proj_rm_{entry_idx}"):
                 for pid in current_project_ids:
                     remove_run_from_project(pid, entry_idx)
                 st.rerun()
@@ -202,7 +202,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 st.session_state.restore_fast_mode = True
             if entry.get("kind") == "crawl4ai_seo":
                 st.session_state.restore_crawl_config = entry.get("crawl_config", {})
-            st.session_state["_newrun_from_dashboard"] = True
+            st.session_state["_newrun_from_history"] = True
             st.rerun()
 
         all_urls = get_urls_from_results(entry)
@@ -220,7 +220,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 st.session_state.restore_fast_mode = True
             if entry.get("kind") == "crawl4ai_seo":
                 st.session_state.restore_crawl_config = entry.get("crawl_config", {})
-            st.session_state["_newrun_from_dashboard"] = True
+            st.session_state["_newrun_from_history"] = True
             st.rerun()
 
         if st.button("Delete", key=f"{key_prefix}del", type="secondary"):
@@ -324,28 +324,33 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 )
 
 
-def page_dashboard() -> None:
-    st.subheader("Dashboard")
+def page_history() -> None:
+    st.subheader("History")
     history = load_history()
     if not history:
-        st.info("No runs yet. Start a capture to see metrics here.")
+        st.info("No runs yet. Start a capture to see history.")
         return
 
     _render_metrics(history)
     st.markdown("---")
 
-    fc1, fc2, fc3 = st.columns([2, 1, 1], gap="small")
+    fc1, fc2, fc3, fc4 = st.columns([2, 1, 1, 1], gap="small")
     with fc1:
-        search = st.text_input("Search", placeholder="Filter by URL...", key="dash_search", label_visibility="collapsed")
+        search = st.text_input("Search", placeholder="Filter by URL...", key="hist_search", label_visibility="collapsed")
     with fc2:
         kind_filter = st.selectbox(
-            "Kind", ["All", "unified", "seo", "fast_seo", "extraction"],
-            key="dash_kind_filter", label_visibility="collapsed",
+            "Type", ["All", "unified", "seo", "fast_seo", "extraction", "blog_audit"],
+            key="hist_kind_filter", label_visibility="collapsed",
         )
     with fc3:
         project_filter = st.selectbox(
             "Project", ["All"] + [p["name"] for p in list_projects()],
-            key="dash_project_filter", label_visibility="collapsed",
+            key="hist_project_filter", label_visibility="collapsed",
+        )
+    with fc4:
+        date_filter = st.selectbox(
+            "Period", ["All time", "Last 7 days", "Last 30 days", "Last 90 days"],
+            key="hist_date_filter", label_visibility="collapsed",
         )
 
     # Filter by project
@@ -354,6 +359,13 @@ def page_dashboard() -> None:
         if project:
             project_indices = set(project.get("run_indices", []))
             history = [h for i, h in enumerate(history) if i in project_indices]
+
+    # Filter by date
+    if date_filter != "All time":
+        from datetime import datetime, timedelta
+        days = {"Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}[date_filter]
+        cutoff = datetime.now() - timedelta(days=days)
+        history = [h for h in history if datetime.fromisoformat(h.get("timestamp", "")) >= cutoff]
 
     df = _build_run_table(history, search, kind_filter)
     selected_idx = _render_run_table(df)
@@ -370,4 +382,4 @@ def page_dashboard() -> None:
     )
 
     selected_rows: dict[str, list[int]] = {}
-    _render_run_detail_drawer(entry, selected_rows, key_prefix=f"dash_{selected_idx}_", entry_idx=selected_idx)
+    _render_run_detail_drawer(entry, selected_rows, key_prefix=f"hist_{selected_idx}_", entry_idx=selected_idx)
