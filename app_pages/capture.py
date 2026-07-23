@@ -23,7 +23,6 @@ from runners import (
     FastRunnerLegacy,
     UnifiedRunner,
     build_runtime_config,
-    build_zip,
 )
 from state import register_runner, unregister_runner
 
@@ -99,22 +98,8 @@ def _render_run_complete(runner) -> None:
     st.markdown("---")
 
     st.markdown("### Download Results")
-    dl_cols = st.columns(4)
+    dl_cols = st.columns(3)
     dl_idx = 0
-
-    if results_by_collector.get("screenshot"):
-        with dl_cols[dl_idx]:
-            zip_data = build_zip(results_by_collector["screenshot"], runner.output_dir)
-            st.download_button(
-                "Screenshots ZIP",
-                data=zip_data,
-                file_name="screenshots.zip",
-                mime="application/zip",
-                key="newrun_dl_zip",
-                width="stretch",
-                type="primary",
-            )
-        dl_idx += 1
 
     if results_by_collector.get("seo"):
         with dl_cols[dl_idx]:
@@ -256,7 +241,7 @@ def _render_url_source_panel() -> list[str]:
 
 
 def _render_collectors_panel() -> dict[str, bool]:
-    """Render collector toggles for SEO and Custom Rules (Screenshots is separate)."""
+    """Render collector toggles for SEO and Custom Rules."""
     collectors = st.session_state.newrun_collectors
 
     tc1, tc2 = st.columns(2)
@@ -292,34 +277,8 @@ def _render_collectors_panel() -> dict[str, bool]:
     return collectors
 
 
-def _render_screenshot_section() -> None:
-    """Render screenshot toggle with PDF option in its own section."""
-    collectors = st.session_state.newrun_collectors
-    st.markdown("**Screenshots**")
-
-    col_ss, col_pdf = st.columns(2)
-    with col_ss:
-        collectors["screenshot"] = st.toggle(
-            "Capture",
-            value=collectors.get("screenshot", True),
-            key="newrun_do_ss",
-        )
-    with col_pdf:
-        generate_pdf = st.toggle(
-            "Generate PDFs",
-            value=st.session_state.get("newrun_generate_pdf", False),
-            key="newrun_generate_pdf",
-            help="Convert each screenshot PNG to a lossless PDF alongside it.",
-        )
-
-    st.session_state.newrun_collectors = collectors
-
-    if generate_pdf and not collectors.get("screenshot"):
-        st.warning("PDFs require screenshots — enable the Screenshots collector.")
-
-
-def _render_settings_panel() -> tuple[dict, str, dict]:
-    """Render settings panel, return (viewport, crawl_mode, crawl_config)."""
+def _render_settings_panel() -> tuple[dict, str, dict, dict]:
+    """Render settings panel, return (viewport, crawl_mode, crawl_config, fast_config)."""
     st.markdown("**Settings**")
     s1, s2 = st.columns(2)
     with s1:
@@ -346,16 +305,10 @@ def _render_settings_panel() -> tuple[dict, str, dict]:
         default=st.session_state.get("newrun_crawl_mode", "fast"),
         key="newrun_crawl_mode",
         format_func=lambda x: {"unified": "Normal", "fast": "Fast", "crawl4ai": "Crawl4AI"}[x],
-        help="Normal: SeleniumBase (screenshots + SEO + extraction)\n"
+        help="Normal: SeleniumBase (SEO + extraction)\n"
              "Fast (default): curl_cffi (SEO only, 8 concurrent)\n"
              "Crawl4AI: Playwright async (SEO only, structured output)",
-    )
-
-    # Disable screenshot collector for non-unified modes
-    if crawl_mode != "unified":
-        collectors = st.session_state.newrun_collectors
-        collectors["screenshot"] = False
-        st.session_state.newrun_collectors = collectors
+    ) or "fast"
 
     # Crawl4AI specific configuration panel
     crawl_config = {}
@@ -517,11 +470,53 @@ def _render_settings_panel() -> tuple[dict, str, dict]:
                 "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
             }
 
+    # Fast mode specific configuration panel
+    fast_config = {}
+    if crawl_mode == "fast":
+        with st.container(border=True):
+            st.markdown("**Fast Mode Settings**")
+
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                st.number_input(
+                    "🔁 Max retries",
+                    min_value=0, max_value=10, value=st.session_state.get("newrun_max_retries", CONFIG["fast"]["max_retries"]),
+                    key="newrun_max_retries",
+                    help="Number of retry attempts for failed URLs (rate limits, server errors)."
+                )
+                st.text_input(
+                    "🔢 Retry on HTTP status codes",
+                    value=st.session_state.get("newrun_retry_on_status", CONFIG["fast"]["retry_on_status"]),
+                    key="newrun_retry_on_status",
+                    help="Comma-separated HTTP status codes to retry (e.g., 429,500,502,503,504). 404/403 are not retried by default."
+                )
+            with fc2:
+                st.number_input(
+                    "⚡ Max concurrent workers",
+                    min_value=1, max_value=32, value=st.session_state.get("newrun_max_workers", CONFIG["fast"]["max_workers"]),
+                    key="newrun_max_workers",
+                    help="Maximum number of concurrent requests."
+                )
+                st.number_input(
+                    "⏱️ Request timeout (seconds)",
+                    min_value=5, max_value=120, value=st.session_state.get("newrun_timeout", CONFIG["fast"]["timeout"]),
+                    key="newrun_timeout",
+                    help="Timeout for each HTTP request in seconds."
+                )
+
+            raw_retry = st.session_state.get("newrun_retry_on_status", CONFIG["fast"]["retry_on_status"])
+            fast_config = {
+                "max_retries": st.session_state.get("newrun_max_retries", CONFIG["fast"]["max_retries"]),
+                "retry_on_status": [int(x.strip()) for x in raw_retry.split(",") if x.strip().isdigit()] if raw_retry else [],
+                "max_workers": st.session_state.get("newrun_max_workers", CONFIG["fast"]["max_workers"]),
+                "timeout": st.session_state.get("newrun_timeout", CONFIG["fast"]["timeout"]),
+            }
+
     viewport = {"width": int(CONFIG["viewport"]["width"]), "height": int(CONFIG["viewport"]["height"])}
-    return viewport, crawl_mode, crawl_config
+    return viewport, crawl_mode, crawl_config, fast_config
 
 
-def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], crawl_config: dict | None = None) -> None:
+def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], crawl_config: dict | None = None, fast_config: dict | None = None) -> None:
     """Render the primary run button with validation."""
     active_collectors = [k for k, v in collectors.items() if v]
     can_run = existing_urls and active_collectors
@@ -565,16 +560,19 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], cr
                 crawl_config=crawl_config or {},
             )
         elif crawl_mode == "fast":
+            fc = fast_config or {}
             runner = FastRunnerLegacy(
                 existing_urls,
                 runtime_cfg,
                 output_dir,
                 seo_fields=st.session_state.get("newrun_seo_fields_enabled"),
+                max_retries=fc.get("max_retries", 3),
+                retry_on_status=fc.get("retry_on_status", [429, 500, 502, 503, 504]),
+                max_workers=fc.get("max_workers", 8),
+                timeout=fc.get("timeout", 30.0),
             )
         else:
             collector_list: list[dict] = []
-            if collectors["screenshot"]:
-                collector_list.append({"name": "screenshot", "rules": None})
             if collectors["seo"]:
                 collector_list.append({"name": "seo", "rules": None})
             if collectors["extraction"]:
@@ -586,7 +584,6 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], cr
                 runtime_cfg,
                 output_dir,
                 seo_fields=st.session_state.get("newrun_seo_fields_enabled"),
-                generate_pdf=st.session_state.get("newrun_generate_pdf", False),
             )
 
         st.session_state.unified_runner = runner
@@ -599,7 +596,7 @@ def page_new_run() -> None:
     st.subheader("New Capture")
 
     for key, default in [
-        ("newrun_collectors", {"screenshot": False, "seo": True, "extraction": False}),
+        ("newrun_collectors", {"seo": True, "extraction": False}),
         ("newrun_output", f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"),
     ]:
         if key not in st.session_state:
@@ -620,6 +617,9 @@ def page_new_run() -> None:
         restore_crawl_mode = st.session_state.pop("restore_crawl_mode", None)
         if restore_crawl_mode:
             st.session_state.newrun_crawl_mode = restore_crawl_mode
+        restore_fast_mode = st.session_state.pop("restore_fast_mode", None)
+        if restore_fast_mode:
+            st.session_state.newrun_crawl_mode = "fast"
         restore_crawl_config = st.session_state.pop("restore_crawl_config", None)
         if restore_crawl_config and isinstance(restore_crawl_config, dict):
             for k, v in restore_crawl_config.items():
@@ -646,13 +646,9 @@ def page_new_run() -> None:
             st.markdown("### Collectors")
             _render_collectors_panel()
 
-            if st.session_state.get("newrun_crawl_mode") == "unified":
-                st.markdown("---")
-                _render_screenshot_section()
-
             st.markdown("---")
             st.markdown("### Settings")
-            viewport, crawl_mode, crawl_config = _render_settings_panel()
+            viewport, crawl_mode, crawl_config, fast_config = _render_settings_panel()
 
             st.markdown("---")
-            _render_run_button(existing_urls, st.session_state.newrun_collectors, crawl_config)
+            _render_run_button(existing_urls, st.session_state.newrun_collectors, crawl_config, fast_config)

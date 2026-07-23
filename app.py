@@ -1,4 +1,4 @@
-"""Page Capture — Desktop app for screenshots and SEO extraction.
+"""Page Capture — Desktop app for SEO extraction and website crawling.
 
 Router: wires page functions into st.navigation with sidebar layout.
 """

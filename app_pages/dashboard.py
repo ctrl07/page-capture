@@ -9,10 +9,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from components.results_viewer import render_results_grid, render_results_list
+from components.results_viewer import render_results_list
 from project import add_run_to_project, list_projects, remove_run_from_project
 from runners import (
-    build_zip,
     delete_history_entry,
     get_results,
     get_urls_from_results,
@@ -54,7 +53,6 @@ def _build_run_table(history: list[dict], search: str, kind_filter: str) -> pd.D
         kind = entry.get("kind", "?")
         kind_label = {
             "unified": "Unified",
-            "screenshot": "Screenshots",
             "seo": "Quick SEO",
             "fast_seo": "Fast SEO",
             "extraction": "Extraction",
@@ -123,7 +121,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
     by_collector = get_results(entry)
     output_dir = Path(entry.get("output_dir", ""))
     collectors = entry.get("collectors", list(by_collector.keys()))
-    labels = {"screenshot": "Screenshots", "seo": "Quick SEO", "extraction": "Custom Rules", "blog_audit": "Blog Audit"}
+    labels = {"seo": "Quick SEO", "extraction": "Custom Rules", "blog_audit": "Blog Audit"}
     available = [c for c in collectors if by_collector.get(c)]
 
     st.markdown("---")
@@ -241,19 +239,13 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 key=f"{key_prefix}dl_csv",
             )
 
-        has_screenshot = "screenshot" in by_collector and by_collector["screenshot"]
-        if has_screenshot:
-            st.download_button(
-                "ZIP", data=build_zip(by_collector["screenshot"], output_dir),
-                file_name="screenshots.zip", mime="application/zip",
-                key=f"{key_prefix}dl_zip",
-            )
-
     if not available:
         st.info("No collector results in this run.")
         return
 
-    tabs = st.tabs([labels.get(c, c) for c in available] + ["Summary"])
+    tab_labels: list[str] = [labels.get(c, c) for c in available]  # type: ignore[list-item]
+    tab_labels.append("Summary")
+    tabs = st.tabs(tab_labels)
     for tab, kind in zip(tabs[:-1], available):
         with tab:
             rows = by_collector[kind]
@@ -262,9 +254,9 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
             search_key = f"{key_prefix}{kind}_search"
             sel_key = f"{key_prefix}{kind}_selected"
 
-            vc1, vc2, vc3, vc4 = st.columns([1, 1, 2, 3])
+            vc1, vc2, vc3 = st.columns([1, 1, 2])
             with vc1:
-                view = st.segmented_control("View", ["Grid", "List"], key=view_key, label_visibility="collapsed")
+                st.segmented_control("View", ["List"], key=view_key, label_visibility="collapsed")
             with vc2:
                 status_filter = st.segmented_control("Filter", ["All", "OK", "Failed"], key=filter_key, label_visibility="collapsed")
             with vc3:
@@ -283,10 +275,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 st.info("No results match the current filters.")
                 continue
 
-            if view == "Grid":
-                sel = render_results_grid(filtered, kind, output_dir, key_prefix=f"{key_prefix}{kind}_")
-            else:
-                sel = render_results_list(filtered, kind, output_dir, key_prefix=f"{key_prefix}{kind}_")
+            sel = render_results_list(filtered, kind, output_dir, key_prefix=f"{key_prefix}{kind}_")
 
             if sel:
                 orig_indices = [rows.index(r) for r in sel]
@@ -305,16 +294,8 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
             st.metric("Failed", total - ok, border=True)
         st.caption(f"Output: `{output_dir}`")
 
-        dl_cols = st.columns(3)
+        dl_cols = st.columns(2)
         with dl_cols[0]:
-            if by_collector.get("screenshot"):
-                st.download_button(
-                    "Screenshots ZIP",
-                    data=build_zip(by_collector["screenshot"], output_dir),
-                    file_name="screenshots.zip", mime="application/zip",
-                    key=f"{key_prefix}zip", width="stretch",
-                )
-        with dl_cols[1]:
             if by_collector.get("seo"):
                 all_keys = list(dict.fromkeys(k for r in by_collector["seo"] for k in r))
                 csv_buf = io.StringIO()
@@ -327,7 +308,7 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                     file_name="seo_results.csv", mime="text/csv",
                     key=f"{key_prefix}dl_seo", width="stretch",
                 )
-        with dl_cols[2]:
+        with dl_cols[1]:
             if by_collector.get("extraction"):
                 all_keys = list(dict.fromkeys(k for r in by_collector["extraction"] for k in r))
                 csv_buf = io.StringIO()
@@ -357,7 +338,7 @@ def page_dashboard() -> None:
         search = st.text_input("Search", placeholder="Filter by URL...", key="dash_search", label_visibility="collapsed")
     with fc2:
         kind_filter = st.selectbox(
-            "Kind", ["All", "unified", "screenshot", "seo", "fast_seo", "extraction"],
+            "Kind", ["All", "unified", "seo", "fast_seo", "extraction"],
             key="dash_kind_filter", label_visibility="collapsed",
         )
     with fc3:

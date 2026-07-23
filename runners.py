@@ -9,20 +9,16 @@ with field lists joined by semicolons.
 from __future__ import annotations
 
 import csv
-import io
 import json
 import random
 import re
 import threading
 import time
-import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-import img2pdf
-from PIL import Image
 from seleniumbase import SB
 
 from extraction import (
@@ -336,36 +332,6 @@ def _resolve_canonical_chains(results: list[dict]) -> None:
     session.close()
 
 
-def build_zip(results: list[dict], output_dir: Path) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for r in results:
-            for key in ("file", "pdf"):
-                raw = r.get(key, "")
-                if raw:
-                    p = Path(raw)
-                    if p.is_file():
-                        zf.write(p, arcname=p.name)
-    return buf.getvalue()
-
-
-_PDF_DPI = 150
-
-
-def png_to_pdf(png_path: Path, pdf_path: Path) -> None:
-    """Convert a PNG to a single-page PDF using img2pdf with correct DPI."""
-    dpi = _PDF_DPI
-    with Image.open(png_path) as im:
-        raw_dpi = im.info.get("dpi")
-        if raw_dpi and raw_dpi[0] > 0 and raw_dpi[1] > 0:
-            dpi = (int(raw_dpi[0]), int(raw_dpi[1]))
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_bytes = img2pdf.convert(str(png_path), dpi=dpi)
-    if pdf_bytes:
-        with open(pdf_path, "wb") as f:
-            f.write(pdf_bytes)
-
-
 def load_history() -> list[dict]:
     if HISTORY_FILE.exists():
         try:
@@ -419,112 +385,6 @@ def get_urls_from_results(entry: dict) -> list[str]:
             if u:
                 urls.append(u)
     return list(dict.fromkeys(urls))
-
-
-class CaptureRunner:
-    def __init__(self, urls: list[str], runtime_cfg: dict, output_dir: Path, kind: str = "screenshot", generate_pdf: bool = False, seo_fields: list[dict] | None = None, progress_callback: Callable[[int, int, str], None] | None = None):
-        self.urls = urls
-        self.runtime_cfg = runtime_cfg
-        self.output_dir = output_dir
-        self.kind = kind
-        self.generate_pdf = generate_pdf
-        self.seo_fields = seo_fields
-        self.progress_callback = progress_callback
-        self.results = []
-        self.cancelled = False
-        self._thread = None
-        self.progress_total = len(urls)
-        self.progress_done = 0
-        self.status = "queued"
-
-    def _report_progress(self) -> None:
-        if self.progress_callback:
-            self.progress_callback(self.progress_done, self.progress_total, self.status)
-
-    def run(self):
-        self.results = []
-        kind = self.kind
-        output_dir = self.output_dir
-        urls = self.urls
-        runtime_cfg = self.runtime_cfg
-        photos_dir = output_dir / "photos"
-        photos_dir.mkdir(parents=True, exist_ok=True)
-        data_dir = output_dir / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        results = self.results
-        self.status = "Running..."
-        self._report_progress()
-
-        with SB(uc=True, test=True, headless=False, window_size=f"{runtime_cfg['viewport']['width']},{runtime_cfg['viewport']['height']}") as sb:
-            page = PageCapture(sb, runtime_cfg)
-            for i, url in enumerate(urls):
-                if self.cancelled:
-                    break
-                self.status = f"Processing {url}"
-                slug = slugify(url)
-                row = {"url": url, "status": "waiting"}
-                try:
-                    if not is_valid_url(url):
-                        row["status"] = "invalid URL"
-                        results.append(row)
-                        continue
-                    page.open(url)
-                    page.scroll()
-                    sb.sleep(runtime_cfg["timing"]["stabilization_ms"] / 1000)
-                    page.hide_overlays()
-                    if kind == "seo":
-                        fields = self.seo_fields or get_standard_seo_fields()
-                        raw = sb.cdp.evaluate(build_seo_js(fields))
-                        row = {"url": url, "status": "ok", **parse_seo_payload(raw, fields)}
-                    else:
-                        png_path = photos_dir / f"{slug}.png"
-                        page.capture_png(png_path)
-                        pdf_path = None
-                        if self.generate_pdf:
-                            pdf_dir = output_dir / "pdf"
-                            pdf_dir.mkdir(parents=True, exist_ok=True)
-                            pdf_path = pdf_dir / f"{slug}.pdf"
-                            png_to_pdf(png_path, pdf_path)
-                        page_data = page.extract_data()
-                        row = {
-                            "url": url, "status": "ok",
-                            "page_name": page_data.get("page_name", ""),
-                            "h1": page_data.get("h1", ""),
-                            "file": str(png_path),
-                            "pdf": str(pdf_path) if pdf_path else "",
-                        }
-                except Exception as exc:
-                    row = {"url": url, "status": f"error: {exc}"}
-                results.append(row)
-                self.progress_done += 1
-                self._report_progress()
-                time.sleep(random.uniform(
-                    runtime_cfg["timing"]["inter_page_delay_min"],
-                    runtime_cfg["timing"]["inter_page_delay_max"],
-                ))
-
-        self.status = "done"
-        self._report_progress()
-
-        # Compute internal_inlinks from outlink counts across all pages
-        if kind == "seo":
-            _compute_internal_inlinks(results)
-
-        csv_path = data_dir / ("seo_results.csv" if kind == "seo" else "capture_results.csv")
-        write_results_csv(results, csv_path)
-
-        timestamp = datetime.now().isoformat()
-        total = len(results)
-        ok_count = sum(1 for r in results if r.get("status") == "ok")
-        save_history({
-            "timestamp": timestamp,
-            "kind": kind,
-            "total": total,
-            "ok": ok_count,
-            "fail": total - ok_count,
-            "output_dir": str(output_dir),
-            "results": results,
-        })
 
 
 class ExtractionRunner:
@@ -615,15 +475,14 @@ class UnifiedRunner:
 
     _thread: Optional[threading.Thread]
 
-    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path, seo_fields: list[dict] | None = None, generate_pdf: bool = False, progress_callback: Callable[[int, int, str], None] | None = None):
+    def __init__(self, urls: list[str], collectors: list[dict], runtime_cfg: dict, output_dir: Path, seo_fields: list[dict] | None = None, progress_callback: Callable[[int, int, str], None] | None = None):
         self.urls = urls
         self.collectors = collectors
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.seo_fields = seo_fields
-        self.generate_pdf = generate_pdf
         self.progress_callback = progress_callback
-        self.results = {"screenshot": [], "seo": [], "extraction": []}
+        self.results = {"seo": [], "extraction": []}
         self.cancelled = False
         self._thread = None
         self.status = "queued"
@@ -636,20 +495,17 @@ class UnifiedRunner:
             self.progress_callback(self.progress_done, self.progress_total, self.status)
 
     def run(self):
-        self.results = {"screenshot": [], "seo": [], "extraction": []}
+        self.results = {"seo": [], "extraction": []}
         self.progress_done = 0
         urls = self.urls
         runtime_cfg = self.runtime_cfg
         output_dir = self.output_dir
         collectors = self.collectors
 
-        photos_dir = output_dir / "photos"
-        photos_dir.mkdir(parents=True, exist_ok=True)
         data_dir = output_dir / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
         active = {c["name"] for c in collectors}
-        run_screenshot = "screenshot" in active
         run_seo = "seo" in active
         run_extraction = "extraction" in active
 
@@ -663,9 +519,7 @@ class UnifiedRunner:
             for i, url in enumerate(urls):
                 if self.cancelled:
                     break
-                slug = slugify(url)
 
-                ss_row = None
                 seo_row = None
                 ext_row = None
 
@@ -683,31 +537,6 @@ class UnifiedRunner:
                         ok = True
                     except Exception as exc:
                         err = str(exc)
-
-                if run_screenshot:
-                    if ok:
-                        try:
-                            png_path = photos_dir / f"{slug}.png"
-                            page.capture_png(png_path)
-                            page_data = page.extract_data()
-                            ss_row = {
-                                "url": url, "status": "ok",
-                                "page_name": page_data.get("page_name", ""),
-                                "h1": page_data.get("h1", ""),
-                                "file": str(png_path),
-                            }
-                            if self.generate_pdf:
-                                pdf_dir = output_dir / "pdf"
-                                pdf_dir.mkdir(parents=True, exist_ok=True)
-                                pdf_path = pdf_dir / f"{slug}.pdf"
-                                png_to_pdf(png_path, pdf_path)
-                                ss_row["pdf"] = str(pdf_path)
-                        except Exception as exc:
-                            ss_row = {"url": url, "status": f"error: {exc}"}
-                    else:
-                        ss_row = {"url": url, "status": f"error: {err}"}
-                    self.results["screenshot"].append(ss_row)
-                    self._bump_progress()
 
                 if run_seo and not self.cancelled:
                     if ok:
@@ -780,30 +609,44 @@ class UnifiedRunner:
 
 def _fetch_and_extract(
     url: str,
-    cookies: dict[str, str],
+    cookies: list[dict],
     user_agent: str,
     timeout: float = 30.0,
 ) -> dict:
-    """Fetch one URL with curl_cffi (Chrome TLS impersonation) and extract SEO data."""
+    """Fetch one URL with curl_cffi (Chrome TLS impersonation) and extract SEO data.
+
+    Args:
+        url: URL to fetch
+        cookies: List of cookie dicts with name, value, domain, path, secure, httpOnly
+        user_agent: User-Agent string
+        timeout: Request timeout in seconds
+
+    Returns:
+        Result dict with SEO data, including final_url after redirects
+    """
     from curl_cffi import requests as _curl
     from lxml import html as _html
 
     headers = {"User-Agent": user_agent} if user_agent else {}
+    # curl_cffi expects cookies as dict[str, str] or list[tuple[str, str]]
+    cookie_dict = {c["name"]: c["value"] for c in cookies if "name" in c and "value" in c}
     try:
-        resp = _curl.get(url, cookies=cookies, headers=headers, timeout=timeout, impersonate="chrome")
+        resp = _curl.get(url, cookies=cookie_dict, headers=headers, timeout=timeout, impersonate="chrome")
     except Exception as exc:
         return {"url": url, "status": f"error: {exc}"}
 
     status_code = resp.status_code
+    final_url = str(resp.url)
     host = url.split("//")[-1].split("/")[0].split(":")[0]
     # Non-2xx responses are almost always bot-block pages (403/503/etc.)
     if status_code != 200:
         return {
             "url": url,
+            "final_url": final_url,
             "status": f"http_{status_code}",
             "status_code": status_code,
         }
-    data: dict = {"url": url, "status": "ok", "status_code": status_code}
+    data: dict = {"url": url, "final_url": final_url, "status": "ok", "status_code": status_code}
 
     try:
         tree = _html.fromstring(resp.text)
@@ -912,12 +755,20 @@ class FastRunnerLegacy:
         output_dir: Path,
         seo_fields: list[dict] | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        max_retries: int = 3,
+        retry_on_status: list[int] | None = None,
+        max_workers: int = 8,
+        timeout: float = 30.0,
     ):
         self.urls = urls
         self.runtime_cfg = runtime_cfg
         self.output_dir = output_dir
         self.seo_fields = seo_fields
         self.progress_callback = progress_callback
+        self.max_retries = max_retries
+        self.retry_on_status = retry_on_status or [429, 500, 502, 503, 504]
+        self.max_workers = max_workers
+        self.timeout = timeout
         self.results: dict[str, list[dict]] = {"seo": []}
         self.cancelled = False
         self._thread = None
@@ -950,15 +801,15 @@ class FastRunnerLegacy:
         except Exception:
             return {}
 
-    def _crawl_batch(self, urls: list[str], cookies_dict: dict, user_agent: str) -> list[dict]:
+    def _crawl_batch(self, urls: list[str], cookies: list[dict], user_agent: str) -> list[dict]:
         if not urls:
             return []
         items: list[dict] = []
-        max_workers = min(8, len(urls))
+        max_workers = min(self.max_workers, len(urls))
 
         def _crawl_one(url: str) -> dict:
             try:
-                return _fetch_and_extract(url, cookies_dict, user_agent)
+                return _fetch_and_extract(url, cookies, user_agent, self.timeout)
             except Exception as exc:
                 return {"url": url, "status": f"error: {exc}"}
 
@@ -982,39 +833,47 @@ class FastRunnerLegacy:
 
         # Step 1: open browser, solve Turnstile on first URL, export session
         session = self._refresh_session(self.urls[0])
-        cookies_dict = {c["name"]: c["value"] for c in session.get("cookies", [])}
+        cookies = session.get("cookies", [])
         user_agent = session.get("user_agent", "")
 
         # Step 2: crawl all URLs concurrently with curl_cffi
         self.status = f"Crawling {len(self.urls)} URLs..."
         self._report_progress()
-        items = self._crawl_batch(self.urls, cookies_dict, user_agent)
+        items = self._crawl_batch(self.urls, cookies, user_agent)
         self.progress_done = min(len(items), self.progress_total)
         self._report_progress()
 
         # Step 3: retry anything that was blocked with a fresh Turnstile session
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(self.max_retries):
+            # Only retry on specific status codes (not 404, 403, etc.)
+            retryable = set(self.retry_on_status)
             blocked = [
                 it for it in items
-                if not (it.get("status") == "ok" and it.get("status_code") == 200)
+                if it.get("status_code") in retryable
+                or it.get("status") == "blocked"
+                or (it.get("status", "").startswith("error:") and "timeout" in it.get("status", "").lower())
             ]
             if not blocked or self.cancelled:
                 break
-            self.status = f"Retrying {len(blocked)} blocked URLs (attempt {attempt + 1}/{max_retries})..."
+            self.status = f"Retrying {len(blocked)} URLs (attempt {attempt + 1}/{self.max_retries})..."
             self._report_progress()
-            fresh = self._refresh_session(blocked[0]["url"])
+            # Use first *successful* URL for Turnstile, not a blocked one
+            seed_url = next((it["url"] for it in items if it.get("status") == "ok"), self.urls[0])
+            fresh = self._refresh_session(seed_url)
             if not fresh.get("cookies"):
                 break
-            cookies_dict = {c["name"]: c["value"] for c in fresh.get("cookies", [])}
+            cookies = fresh.get("cookies", [])
             user_agent = fresh.get("user_agent", "")
-            retried = self._crawl_batch([it["url"] for it in blocked], cookies_dict, user_agent)
-            by_url = {r["url"]: r for r in retried}
+            # Track original URLs for proper merge after redirects
+            original_urls = [it["url"] for it in blocked]
+            retried = self._crawl_batch(original_urls, cookies, user_agent)
+            # Merge by original URL (not final_url which may have redirected)
+            by_original = {r["url"]: r for r in retried}
             for it in items:
                 u = it.get("url")
-                if u in by_url:
+                if u in by_original:
                     it.clear()
-                    it.update(by_url[u])
+                    it.update(by_original[u])
             self.progress_done = min(len(items), self.progress_total)
             self._report_progress()
 

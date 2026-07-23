@@ -197,3 +197,10 @@ crawl4ai:
   respect_robots_txt: false   # Check and respect robots.txt rules
   allowed_domains: []         # Only crawl URLs within these domains (empty = derive from seed)
   blocked_domains: []         # Skip URLs from these domains
+
+fast:
+  # Fast crawl (curl_cffi) configuration
+  max_retries: 3              # Number of retry attempts for failed URLs
+  retry_on_status: "429,500,502,503,504"  # HTTP status codes to retry (comma-separated)
+  max_workers: 8              # Maximum concurrent workers
+  timeout: 30                 # Request timeout in seconds
