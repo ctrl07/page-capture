@@ -1,14 +1,13 @@
 # Page Capture
 
-Desktop app for website migration audits — screenshots, SEO extraction, blog comparison, and custom data extraction. Runs SeleniumBase + CDP for bot‑bypass browser automation.
+Desktop app for website migration audits — SEO extraction, blog comparison, and custom data extraction. Runs SeleniumBase + CDP for bot‑bypass browser automation.
 
 ## Features
 
-- **Unified Crawl** — screenshots, SEO, and custom extraction in one browser session
+- **Unified Crawl** — SEO and custom extraction in one browser session
 - **Fast Crawl** — SEO‑only via curl_cffi (8 concurrent, Turnstile bypass)
 - **Crawl4AI Deep Crawl** — follow links N hops deep, respect robots.txt, rate limits, filter by URL pattern. Exports Excel / JSON / CSV
 - **Blog Audit** — compare source vs target blog posts field‑by‑field (title, date, author, categories, content, images). Pick a platform‑specific ruleset or use the generic one.
-- **Screenshots** — full‑page PNG with optional PDF via img2pdf
 - **Custom Rules** — CSS selector extraction with save / load / delete rule sets
 - **Import URLs** — paste, sitemap, CSV, WordPress XML
 - **Dashboard** — browse runs, grid/list views, re‑run selected URLs, re‑capture all
@@ -38,20 +37,20 @@ Open **http://localhost:8501**.
 
 ## Which Mode Should I Use?
 
-| Mode | Best For | Screenshots | JS Rendering | Speed |
-|------|----------|-------------|--------------|-------|
-| **Normal (Unified)** | Full audits + screenshots | ✅ | ✅ SeleniumBase | Medium |
-| **Fast (curl_cffi)** | Large SEO‑only scans | ❌ | ❌ | ~8× faster |
-| **Crawl4AI** | Deep site crawls, structured data | ❌ | ✅ Playwright | Configurable (slider + presets) |
-| **Blog Audit** | Migration content comparison | ❌ | ✅ SeleniumBase | Per‑pair |
+| Mode | Best For | JS Rendering | Speed |
+|------|----------|--------------|-------|
+| **Normal (Unified)** | Full audits + extraction | ✅ SeleniumBase | Medium |
+| **Fast (curl_cffi)** | Large SEO‑only scans | ❌ | ~8× faster |
+| **Crawl4AI** | Deep site crawls, structured data | ✅ Playwright | Configurable (slider + presets) |
+| **Blog Audit** | Migration content comparison | ✅ SeleniumBase | Per‑pair |
 
 ## Quick Workflows
 
 ### Run a Unified Crawl
 1. Go to **Capture** > paste / import URLs
-2. Turn on **SEO data** (on by default), toggle **Screenshots** and **Custom Rules** as needed
+2. Turn on **SEO data** (on by default), toggle **Custom Rules** as needed
 3. Pick **Normal** mode, hit **Start Capture**
-4. When done — download Screenshots ZIP, SEO CSV, or Extraction CSV
+4. When done — download SEO CSV, or Extraction CSV
 
 ### Run a Fast SEO Scan
 1. **Capture** > import URLs
