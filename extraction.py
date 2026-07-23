@@ -408,7 +408,9 @@ def load_ruleset(name: str) -> list[dict]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, dict) and "rules" in data:
         return data["rules"]
-    return data
+    if isinstance(data, list):
+        return data
+    return []
 
 
 def delete_ruleset(name: str) -> bool:
