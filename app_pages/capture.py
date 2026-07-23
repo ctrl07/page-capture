@@ -14,14 +14,12 @@ from components.progress import run_with_progress
 from components.results_viewer import render_unified_results
 from extraction import get_standard_seo_fields, render_seo_fields_selector
 from importers import (
-    import_from_sitemap_url,
-    import_from_wp_xml,
+    import_from_csv_file,
     parse_urls_text,
 )
 from page_capture import load_config
 from runners import (
     HERE,
-    Crawl4AIRunner,
     FastRunnerLegacy,
     UnifiedRunner,
     build_runtime_config,
@@ -30,8 +28,8 @@ from state import register_runner, unregister_runner
 
 CONFIG = load_config(HERE / "config.yaml")
 
-# ── Crawl4AI Quick-Start Presets ─────────────────────────────────────────────
-CRAWL_PRESETS = {
+# ── Fast Crawl Quick-Start Presets ─────────────────────────────────────────────
+FAST_CRAWL_PRESETS = {
     "Just my URLs": {
         "max_depth": 0, "max_pages": 100,
         "strip_query_params": True, "respect_robots_txt": True,
@@ -65,7 +63,6 @@ def _smart_crawl_mode(urls: list[str]) -> str:
     """Auto-select crawl mode based on URL count."""
     if len(urls) <= 10:
         return "fast"
-    # For many URLs, default to crawl4ai if depth > 0 will be used
     return "unified"
 
 
@@ -185,7 +182,7 @@ def _step_1_urls() -> list[str]:
 
     url_source = st.radio(
         "URL source",
-        ["Paste URLs", "Sitemap", "WordPress XML"],
+        ["Paste URLs", "Import CSV"],
         horizontal=True,
         key="newrun_url_source",
         label_visibility="collapsed",
@@ -203,37 +200,19 @@ def _step_1_urls() -> list[str]:
         if raw:
             imported_urls = parse_urls_text(raw)
 
-    elif url_source == "Sitemap":
-        sm_col1, sm_col2 = st.columns([3, 1])
-        with sm_col1:
-            sm_url = st.text_input(
-                "Sitemap URL",
-                placeholder="https://example.com/sitemap.xml",
-                key="newrun_sm",
-                label_visibility="collapsed",
-            )
-        with sm_col2:
-            if sm_url and st.button("Fetch", key="newrun_sm_fetch", width="stretch"):
-                with st.spinner("Fetching..."):
-                    try:
-                        imported_urls = import_from_sitemap_url(sm_url)
-                        st.success(f"Found {len(imported_urls)} URLs")
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
-
-    elif url_source == "WordPress XML":
+    elif url_source == "Import CSV":
         uploaded = st.file_uploader(
-            "Upload WordPress XML",
-            type=["xml"],
-            key="newrun_wp",
+            "Upload CSV file",
+            type=["csv"],
+            key="newrun_csv",
             label_visibility="collapsed",
         )
         if uploaded:
             raw = uploaded.read()
             try:
-                posts = import_from_wp_xml(raw)
-                imported_urls = [p["url"] for p in posts]
-                st.success(f"Found {len(imported_urls)} posts/pages")
+                pairs = import_from_csv_file(raw)
+                imported_urls = [a for a, _ in pairs]
+                st.success(f"Found {len(imported_urls)} URLs from CSV")
             except Exception as e:
                 st.error(f"Failed: {e}")
 
@@ -256,7 +235,16 @@ def _step_1_urls() -> list[str]:
             st.session_state.capture_urls = []
             st.rerun()
     elif not imported_urls:
-        st.info("Paste URLs above, or import from a sitemap or WordPress XML.")
+        st.info("Paste URLs above, or import from CSV.")
+
+    # Sitemap auto-discovery toggle (for fast mode)
+    if url_count > 0:
+        st.checkbox(
+            "Auto-discover URLs from sitemap.xml",
+            key="newrun_auto_discover_sitemap",
+            value=False,
+            help="Fetch /sitemap.xml from seed URLs and add discovered URLs to crawl (Fast mode only)",
+        )
 
     return existing_urls
 
@@ -308,51 +296,48 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
 
     crawl_mode = st.segmented_control(
         "Mode",
-        options=["unified", "fast", "crawl4ai"],
+        options=["unified", "fast"],
         default=default_mode,
         key="newrun_crawl_mode",
-        format_func=lambda x: {"unified": "Normal", "fast": "Fast", "crawl4ai": "Crawl4AI"}[x],
+        format_func=lambda x: {"unified": "Normal", "fast": "Fast"}[x],
         help=(
             "Normal: SeleniumBase (SEO + extraction, browser-rendered)\n"
-            "Fast: curl_cffi (SEO only, 8 concurrent, no JS)\n"
-            "Crawl4AI: Playwright async (deep crawl, structured output)"
+            "Fast: curl_cffi (SEO only, 8 concurrent, no JS)"
         ),
     ) or "fast"
 
     crawl_config = {}
     fast_config = {}
 
-    # Crawl4AI specific configuration
-    if crawl_mode == "crawl4ai":
+    # Fast mode specific configuration
+    if crawl_mode == "fast":
         with st.container(border=True):
-            st.markdown("**Crawl Settings**")
+            st.markdown("**Fast Crawl Settings**")
 
             # Quick Setup
-            preset_names = list(CRAWL_PRESETS.keys())
+            preset_names = list(FAST_CRAWL_PRESETS.keys())
             preset = st.selectbox(
                 "Quick setup (you can still customize below):",
                 ["Custom", *preset_names],
-                key="newrun_crawl_preset",
+                key="newrun_fast_crawl_preset",
                 label_visibility="collapsed",
                 help="Choose a preset to auto-fill the settings below, then tweak anything you like.",
             )
             if preset != "Custom":
-                for k, v in CRAWL_PRESETS[preset].items():
+                for k, v in FAST_CRAWL_PRESETS[preset].items():
                     st.session_state[f"newrun_{k}"] = v
-                st.session_state.pop("newrun_crawl_preset", None)
+                st.session_state.pop("newrun_fast_crawl_preset", None)
                 st.rerun()
 
             # Settings Grid
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                depth = st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"])
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                depth = st.session_state.get("newrun_max_depth", CONFIG.get("fast", {}).get("max_depth", 0))
                 st.number_input(
-                    "🔗 How many links to follow",
+                    "🔗 Max depth",
                     min_value=0, max_value=10, value=depth,
                     key="newrun_max_depth",
-                    help="0 = Only scan the URLs you entered. "
-                         "1 = Also scan links found on those pages. "
-                         "2 = Also scan links found on those pages, and so on.",
+                    help="0 = Only scan the URLs you entered. 1 = Also scan links found on those pages. 2+ = Deep crawl.",
                 )
                 depth_label = {0: "🔵 Just your URLs", 1: "🟡 One level deep",
                                2: "🟠 Two levels deep"}.get(depth, "🔴 Deep crawl (many pages)")
@@ -361,49 +346,45 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
                 st.number_input(
                     "📄 Maximum pages to scan",
                     min_value=1, max_value=100000,
-                    value=st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                    value=st.session_state.get("newrun_max_pages", CONFIG.get("fast", {}).get("max_pages", 1000)),
                     key="newrun_max_pages",
                     help="Safety limit to prevent accidentally scanning too many pages.",
                 )
 
                 if depth > 2:
                     st.warning("Following links 3+ levels deep can scan thousands of pages and may take a long time.")
-                if st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]) > 5000:
+                if st.session_state.get("newrun_max_pages", CONFIG.get("fast", {}).get("max_pages", 1000)) > 5000:
                     st.warning("Scanning over 5,000 pages can get your IP blocked by some websites. Increase only if needed.")
 
                 st.toggle(
                     "🧹 Ignore tracking codes (?utm_source=, ?ref=, etc.)",
-                    value=st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
+                    value=st.session_state.get("newrun_strip_query_params", CONFIG.get("fast", {}).get("strip_query_params", True)),
                     key="newrun_strip_query_params",
                     help="Removes things like ?utm_source=facebook so pages with different tracking codes aren't scanned twice.",
                 )
                 st.toggle(
                     "🤖 Follow site crawling rules (recommended)",
-                    value=st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                    value=st.session_state.get("newrun_respect_robots_txt", CONFIG.get("fast", {}).get("respect_robots_txt", False)),
                     key="newrun_respect_robots_txt",
-                    help="Most websites have a 'robots.txt' file that tells crawlers which pages to skip. "
-                         "Enabling this is polite and helps avoid being blocked.",
+                    help="Most websites have a 'robots.txt' file that tells crawlers which pages to skip. Enabling this is polite and helps avoid being blocked.",
                 )
 
                 st.text_area(
                     "✅ Only scan URLs containing...",
-                    value="\n".join(st.session_state.get("newrun_include_patterns", CONFIG["crawl4ai"]["include_patterns"])),
+                    value="\n".join(st.session_state.get("newrun_include_patterns", CONFIG.get("fast", {}).get("include_patterns", []))),
                     key="newrun_include_patterns",
-                    help="One per line. Only pages whose web address contains these words will be scanned. "
-                         "Leave empty to scan all URLs.\n\n"
-                         "Example:\n  /blog/\n  /news/",
+                    help="One per line. Only pages whose web address contains these words will be scanned. Leave empty to scan all URLs.\n\nExample:\n  /blog/\n  /news/",
                     height=80,
                 )
                 st.text_area(
                     "❌ Skip URLs containing...",
-                    value="\n".join(st.session_state.get("newrun_exclude_patterns", CONFIG["crawl4ai"]["exclude_patterns"])),
+                    value="\n".join(st.session_state.get("newrun_exclude_patterns", CONFIG.get("fast", {}).get("exclude_patterns", []))),
                     key="newrun_exclude_patterns",
-                    help="One per line. Pages whose web address contains these words will be skipped.\n\n"
-                         "Example:\n  /tag/\n  ?page=",
+                    help="One per line. Pages whose web address contains these words will be skipped.\n\nExample:\n  /tag/\n  ?page=",
                     height=80,
                 )
 
-            with cc2:
+            with fc2:
                 if urls:
                     from urllib.parse import urlparse as _urlparse
                     detected = set()
@@ -417,19 +398,16 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
 
                 st.text_area(
                     "🌐 Stay on these websites only",
-                    value="\n".join(st.session_state.get("newrun_allowed_domains", CONFIG["crawl4ai"]["allowed_domains"])),
+                    value="\n".join(st.session_state.get("newrun_allowed_domains", CONFIG.get("fast", {}).get("allowed_domains", []))),
                     key="newrun_allowed_domains",
-                    help="One domain per line. Only pages from these websites will be scanned.\n"
-                         "Leave empty to automatically stay on the same website(s) as your starting URLs.\n\n"
-                         "Example:\n  example.com\n  blog.example.com",
+                    help="One domain per line. Only pages from these websites will be scanned.\nLeave empty to automatically stay on the same website(s) as your starting URLs.\n\nExample:\n  example.com\n  blog.example.com",
                     height=80,
                 )
                 st.text_area(
                     "🚫 Skip these websites",
-                    value="\n".join(st.session_state.get("newrun_blocked_domains", CONFIG["crawl4ai"]["blocked_domains"])),
+                    value="\n".join(st.session_state.get("newrun_blocked_domains", CONFIG.get("fast", {}).get("blocked_domains", []))),
                     key="newrun_blocked_domains",
-                    help="One domain per line. Pages from these websites will never be scanned.\n\n"
-                         "Example:\n  facebook.com\n  twitter.com",
+                    help="One domain per line. Pages from these websites will never be scanned.\n\nExample:\n  facebook.com\n  twitter.com",
                     height=80,
                 )
 
@@ -443,7 +421,7 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
             if url_count == 0:
                 st.info("Add URLs in Step 1 to see an estimate of how many pages will be scanned.")
             else:
-                depth = st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"])
+                depth = st.session_state.get("newrun_max_depth", CONFIG.get("fast", {}).get("max_depth", 0))
                 if depth == 0:
                     estimated = url_count
                 elif depth == 1:
@@ -452,7 +430,7 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
                     estimated = min(url_count * 50, 50000)
                 else:
                     estimated = min(url_count * (10 ** depth), 100000)
-                max_p = st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"])
+                max_p = st.session_state.get("newrun_max_pages", CONFIG.get("fast", {}).get("max_pages", 1000))
                 estimated = min(estimated, max_p)
 
                 secs = estimated * 2
@@ -471,14 +449,15 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
             raw_blocked = st.session_state.get("newrun_blocked_domains", "")
 
             crawl_config = {
-                "max_depth": st.session_state.get("newrun_max_depth", CONFIG["crawl4ai"]["max_depth"]),
-                "max_pages": st.session_state.get("newrun_max_pages", CONFIG["crawl4ai"]["max_pages"]),
+                "max_depth": st.session_state.get("newrun_max_depth", CONFIG.get("fast", {}).get("max_depth", 0)),
+                "max_pages": st.session_state.get("newrun_max_pages", CONFIG.get("fast", {}).get("max_pages", 1000)),
                 "include_patterns": [p.strip() for p in raw_include.split("\n") if p.strip()] if raw_include else [],
                 "exclude_patterns": [p.strip() for p in raw_exclude.split("\n") if p.strip()] if raw_exclude else [],
-                "strip_query_params": st.session_state.get("newrun_strip_query_params", CONFIG["crawl4ai"]["strip_query_params"]),
-                "respect_robots_txt": st.session_state.get("newrun_respect_robots_txt", CONFIG["crawl4ai"]["respect_robots_txt"]),
+                "strip_query_params": st.session_state.get("newrun_strip_query_params", CONFIG.get("fast", {}).get("strip_query_params", True)),
+                "respect_robots_txt": st.session_state.get("newrun_respect_robots_txt", CONFIG.get("fast", {}).get("respect_robots_txt", False)),
                 "allowed_domains": [d.strip() for d in raw_allowed.split("\n") if d.strip()] if raw_allowed else [],
                 "blocked_domains": [d.strip() for d in raw_blocked.split("\n") if d.strip()] if raw_blocked else [],
+                "auto_discover_sitemap": st.session_state.get("newrun_auto_discover_sitemap", False),
             }
 
     # Fast mode specific configuration
@@ -491,13 +470,13 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
                 st.number_input(
                     "🔁 Max retries",
                     min_value=0, max_value=10,
-                    value=st.session_state.get("newrun_max_retries", CONFIG["fast"]["max_retries"]),
+                    value=st.session_state.get("newrun_max_retries", CONFIG.get("fast", {}).get("max_retries", 3)),
                     key="newrun_max_retries",
                     help="Number of retry attempts for failed URLs (rate limits, server errors)."
                 )
                 st.text_input(
                     "🔢 Retry on HTTP status codes",
-                    value=st.session_state.get("newrun_retry_on_status", CONFIG["fast"]["retry_on_status"]),
+                    value=st.session_state.get("newrun_retry_on_status", CONFIG.get("fast", {}).get("retry_on_status", "429,500,502,503,504")),
                     key="newrun_retry_on_status",
                     help="Comma-separated HTTP status codes to retry (e.g., 429,500,502,503,504). 404/403 are not retried by default."
                 )
@@ -512,24 +491,22 @@ def _step_3_crawl_mode(urls: list[str]) -> tuple[str, dict, dict]:
                 st.number_input(
                     "⏱️ Request timeout (seconds)",
                     min_value=5, max_value=120,
-                    value=st.session_state.get("newrun_timeout", CONFIG["fast"]["timeout"]),
+                    value=st.session_state.get("newrun_timeout", CONFIG.get("fast", {}).get("timeout", 30)),
                     key="newrun_timeout",
                     help="Timeout for each HTTP request in seconds."
                 )
 
-            raw_retry = st.session_state.get("newrun_retry_on_status", CONFIG["fast"]["retry_on_status"])
+            raw_retry = st.session_state.get("newrun_retry_on_status", CONFIG.get("fast", {}).get("retry_on_status", "429,500,502,503,504"))
             fast_config = {
-                "max_retries": st.session_state.get("newrun_max_retries", CONFIG["fast"]["max_retries"]),
+                "max_retries": st.session_state.get("newrun_max_retries", CONFIG.get("fast", {}).get("max_retries", 3)),
                 "retry_on_status": [int(x.strip()) for x in raw_retry.split(",") if x.strip().isdigit()] if raw_retry else [],
                 "max_workers": st.session_state.get("newrun_max_workers", _smart_fast_workers()),
-                "timeout": st.session_state.get("newrun_timeout", CONFIG["fast"]["timeout"]),
+                "timeout": st.session_state.get("newrun_timeout", CONFIG.get("fast", {}).get("timeout", 30.0)),
             }
 
     # Show smart default badge
     if crawl_mode == "fast":
         st.caption(":material/bolt: Fast mode — SEO only, no JavaScript rendering")
-    elif crawl_mode == "crawl4ai":
-        st.caption(":material/psychology: Crawl4AI — deep crawl, async, structured output")
     else:
         st.caption(":material/desktop_windows: Normal mode — full browser, SEO + extraction")
 
@@ -671,15 +648,7 @@ def _render_run_button(existing_urls: list[str], collectors: dict[str, bool], cr
             stabilization_ms=int(st.session_state.get("newrun_stabilization", CONFIG["timing"]["stabilization_ms"])),
         )
 
-        if crawl_mode == "crawl4ai":
-            runner = Crawl4AIRunner(
-                existing_urls,
-                runtime_cfg,
-                output_dir,
-                seo_fields=st.session_state.get("newrun_seo_fields_enabled"),
-                crawl_config=crawl_config or {},
-            )
-        elif crawl_mode == "fast":
+        if crawl_mode == "fast":
             fc = fast_config or {}
             runner = FastRunnerLegacy(
                 existing_urls,

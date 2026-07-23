@@ -12,7 +12,6 @@ dependencies = [
     "fpdf2>=2.8.0",
     "curl_cffi>=0.15",
     "lxml>=5.0",
-    "crawl4ai>=0.6.0",
     "openpyxl>=3.1.5",
     "trafilatura>=1.9.0",
 ]

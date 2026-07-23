@@ -200,8 +200,6 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 st.session_state.restore_extraction_rules = entry["extraction_rules"]
             if entry.get("fast_mode"):
                 st.session_state.restore_fast_mode = True
-            if entry.get("kind") == "crawl4ai_seo":
-                st.session_state.restore_crawl_config = entry.get("crawl_config", {})
             st.session_state["_newrun_from_dashboard"] = True
             st.rerun()
 
@@ -218,8 +216,6 @@ def _render_run_detail_drawer(entry: dict, selected_rows: dict[str, list[int]], 
                 st.session_state.restore_extraction_rules = entry["extraction_rules"]
             if entry.get("fast_mode"):
                 st.session_state.restore_fast_mode = True
-            if entry.get("kind") == "crawl4ai_seo":
-                st.session_state.restore_crawl_config = entry.get("crawl_config", {})
             st.session_state["_newrun_from_dashboard"] = True
             st.rerun()
 

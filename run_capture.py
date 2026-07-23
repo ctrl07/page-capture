@@ -14,13 +14,7 @@ from pathlib import Path
 
 from seleniumbase import SB
 
-from importers import (
-    import_from_csv_file,
-    import_from_sitemap_url,
-    import_from_sitemap_xml,
-    import_from_wp_xml,
-    parse_urls_text,
-)
+from importers import import_from_csv_file, parse_urls_text
 from page_capture import PageCapture, load_config
 
 HERE = Path(__file__).resolve().parent
@@ -94,7 +88,7 @@ def _seo_js() -> str:
         ogTitle, ogDesc, ogImage, schemaTypes, wordCount,
         internal, external, imagesMissingAlt,
     });
-})()
+})
 """
 
 
@@ -192,10 +186,7 @@ def main():
     parser = argparse.ArgumentParser(description="Page Capture CLI")
     parser.add_argument("--kind", choices=["screenshot", "seo"], default="screenshot")
     parser.add_argument("urls", nargs="*", help="URL(s) to process")
-    parser.add_argument("--sitemap-url", help="Fetch URLs from a sitemap URL")
-    parser.add_argument("--sitemap-file", help="Read sitemap XML from file")
     parser.add_argument("--csv", help="Read URL pairs from CSV file (uses first column)")
-    parser.add_argument("--wp-xml", help="Read URLs from WordPress XML export file")
     parser.add_argument("--output-dir", default=None, help="Output directory (default: auto-generated)")
     args = parser.parse_args()
 
@@ -204,18 +195,6 @@ def main():
     if args.urls:
         urls = [u for u in args.urls if u.strip()]
 
-    if args.sitemap_url:
-        print(f"Fetching sitemap: {args.sitemap_url}")
-        fetched = import_from_sitemap_url(args.sitemap_url)
-        urls.extend(fetched)
-        print(f"  Found {len(fetched)} URLs")
-
-    if args.sitemap_file:
-        raw = Path(args.sitemap_file).read_text(encoding="utf-8")
-        parsed = import_from_sitemap_xml(raw)
-        urls.extend(parsed)
-        print(f"  Parsed {len(parsed)} URLs from sitemap")
-
     if args.csv:
         raw = Path(args.csv).read_bytes()
         pairs = import_from_csv_file(raw)
@@ -223,14 +202,7 @@ def main():
         urls.extend(csv_urls)
         print(f"  Found {len(csv_urls)} URLs from CSV")
 
-    if args.wp_xml:
-        raw = Path(args.wp_xml).read_bytes()
-        posts = import_from_wp_xml(raw)
-        wp_urls = [p["url"] for p in posts]
-        urls.extend(wp_urls)
-        print(f"  Found {len(wp_urls)} URLs from WordPress export")
-
-    urls = list(dict.fromkeys(urls))  # deduplicate preserving order
+    urls = list(dict.fromkeys(urls))
     urls = [u for u in urls if u.strip()]
 
     if not urls:
@@ -239,7 +211,7 @@ def main():
             urls = parse_urls_text(urls_env)
 
     if not urls:
-        print("No URLs provided. Pass URLs as arguments or use --sitemap-url, --csv, --wp-xml, or set URLS env var.")
+        print("No URLs provided. Pass URLs as arguments or use --csv, or set URLS env var.")
         sys.exit(1)
 
     kind = args.kind

@@ -208,7 +208,6 @@ def build_runtime_config(CONFIG: dict, viewport: dict, stabilization_ms: int) ->
         "timing": {**CONFIG["timing"], "stabilization_ms": stabilization_ms},
         "hide": CONFIG.get("hide", {}),
         "hide_visibility": CONFIG.get("hide_visibility", {}),
-        "crawl4ai": CONFIG.get("crawl4ai", {}),
     }
 
 

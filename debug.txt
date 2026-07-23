@@ -1,0 +1,1 @@
+695: '    def _report_progress(self) -> None:\n'

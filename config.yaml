@@ -163,30 +163,7 @@ viewport:
   height: 1080
   width: 1920
 
-crawl4ai:
-  # Crawl4AI configuration for fast SEO crawling
-  rate_limit_rps: 10          # Requests per second per domain
-  rate_limit_burst: 1         # Burst allowance
-  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  # proxy: "http://user:pass@proxy.example.com:8080"  # Optional proxy
-  timeout: 60                 # Request timeout in seconds
-  wait_until: "domcontentloaded"  # Page load wait condition: "load", "domcontentloaded", "networkidle", "commit"
-  wait_for_timeout: 30000     # Wait condition timeout in ms
-  navigation_timeout: 90000   # Navigation timeout in ms
-  # Anti-bot bypass options
-  simulate_user: true         # Simulate human-like mouse/keyboard
-  magic: true                 # Auto-detect and handle common protections
-  override_navigator: true    # Spoof navigator.webdriver, plugins, languages
-  user_agent_mode: "random"   # Rotate user agents: "random", "desktop", "mobile"
-  session_id: "default"       # Reuse browser context across URLs (persistence)
-  mean_delay: 2.0             # Base delay between requests (seconds)
-  max_range: 3.0              # Random delay range: mean_delay ± max_range
-  remove_overlay_elements: true  # Remove overlay elements (Cloudflare challenges, etc.)
-  remove_consent_popups: true    # Remove cookie consent popups
-  # Browser config
-  headless: true
-  viewport_width: 1920
-  viewport_height: 1080
+
 
   # === Step 1: Core Crawl Configuration ===
   max_depth: 0                # 0 = initial URLs only, 1+ = follow links up to N hops
@@ -204,6 +181,17 @@ fast:
   retry_on_status: "429,500,502,503,504"  # HTTP status codes to retry (comma-separated)
   max_workers: 8              # Maximum concurrent workers
   timeout: 30                 # Request timeout in seconds
+  
+  # Deep crawl settings
+  max_depth: 0                # 0 = initial URLs only, 1+ = follow links up to N hops
+  max_pages: 1000             # Maximum total pages to crawl (safety limit)
+  include_patterns: []        # Only crawl URLs matching these regex patterns (empty = all)
+  exclude_patterns: []        # Skip URLs matching these regex patterns
+  strip_query_params: false   # Strip query parameters before dedup/crawling
+  respect_robots_txt: false   # Check and respect robots.txt rules
+  allowed_domains: []         # Only crawl URLs within these domains (empty = derive from seed)
+  blocked_domains: []         # Skip URLs from these domains
+  auto_discover_sitemap: false # Auto-discover URLs from sitemap.xml at seed URLs
 
 trafilatura:
   # Trafilatura content extraction configuration (used by Fast crawl)

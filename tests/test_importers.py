@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from importers import (
     import_from_csv_file,
-    import_from_sitemap_xml,
-    import_from_wp_xml,
     is_valid_url,
     parse_urls_text,
 )
@@ -65,39 +61,6 @@ class TestParseUrlsText:
         assert result == ["https://a.com", "https://b.com"]
 
 
-class TestImportFromSitemapXml:
-    def test_basic_sitemap(self):
-        xml = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/</loc></url>
-  <url><loc>https://example.com/about</loc></url>
-  <url><loc>https://example.com/contact</loc></url>
-</urlset>"""
-        urls = import_from_sitemap_xml(xml)
-        assert len(urls) == 3
-        assert "https://example.com/" in urls
-        assert "https://example.com/about" in urls
-
-    def test_no_namespace(self):
-        xml = """<?xml version="1.0"?>
-<urlset>
-  <url><loc>https://test.com/page1</loc></url>
-  <url><loc>https://test.com/page2</loc></url>
-</urlset>"""
-        urls = import_from_sitemap_xml(xml)
-        assert len(urls) == 2
-
-    def test_invalid_xml(self):
-        with pytest.raises(ValueError, match="Invalid XML"):
-            import_from_sitemap_xml("not xml at all")
-
-    def test_no_loc_elements(self):
-        xml = """<?xml version="1.0"?>
-<urlset><url><loc></loc></url></urlset>"""
-        with pytest.raises(ValueError, match="No <loc>"):
-            import_from_sitemap_xml(xml)
-
-
 class TestImportFromCsvFile:
     def test_single_column(self):
         csv = "https://a.com\nhttps://b.com"
@@ -121,36 +84,3 @@ class TestImportFromCsvFile:
         csv = b"https://a.com\nhttps://b.com"
         pairs = import_from_csv_file(csv)
         assert len(pairs) == 2
-
-
-class TestImportFromWpXml:
-    def test_basic_export(self):
-        xml = """<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0"
-  xmlns:content="http://purl.org/rss/1.0/modules/content/"
-  xmlns:dc="http://purl.org/dc/elements/1.1/"
-  xmlns:wp="http://wordpress.org/export/1.2/">
-<channel>
-  <item>
-    <title>Hello World</title>
-    <link>https://example.com/hello-world</link>
-    <wp:post_date>2024-01-15 10:30:00</wp:post_date>
-    <wp:post_type>post</wp:post_type>
-    <category domain="category" nicename="news">News</category>
-    <category domain="post_tag" nicename="intro">Intro</category>
-  </item>
-</channel>
-</rss>"""
-        posts = import_from_wp_xml(xml)
-        assert len(posts) == 1
-        assert posts[0]["title"] == "Hello World"
-        assert posts[0]["url"] == "https://example.com/hello-world"
-        assert posts[0]["date"] == "2024-01-15"
-        assert "News" in posts[0]["category"]
-        assert "Intro" in posts[0]["tags"]
-
-    def test_no_posts(self):
-        xml = """<?xml version="1.0"?>
-<rss version="2.0"><channel></channel></rss>"""
-        with pytest.raises(ValueError, match="No posts/pages"):
-            import_from_wp_xml(xml)
