@@ -1,4 +1,4 @@
-"""Settings page — config editor and output folder management."""
+"""Settings page — config editor with category sidebar and output folder management."""
 
 from __future__ import annotations
 
@@ -12,20 +12,89 @@ from runners import HERE
 
 CONFIG_PATH = HERE / "config.yaml"
 
-
-@st.dialog("Delete folder")
-def _confirm_delete_folder(folder_path, selected):
-    st.write(f"Delete `{selected}`? This cannot be undone.")
-    with st.container(horizontal=True):
-        if st.button("Yes, delete", type="primary"):
-            try:
-                shutil.rmtree(folder_path)
-                st.success(f"Deleted {selected}")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to delete: {e}")
-        if st.button("Cancel"):
-            st.rerun()
+CATEGORIES = {
+    "browser": {
+        "icon": "🖥️",
+        "label": "Browser & Capture",
+        "fields": [
+            ("viewport.width", "Viewport Width", "number", {"min_value": 320, "max_value": 3840, "step": 1}),
+            ("viewport.height", "Viewport Height", "number", {"min_value": 320, "max_value": 2160, "step": 1}),
+            ("timing.stabilization_ms", "Stabilization (ms)", "number", {"min_value": 500, "max_value": 10000, "step": 100}),
+            ("timing.scroll_interval_ms", "Scroll Interval (ms)", "number", {"min_value": 100, "max_value": 5000, "step": 100}),
+            ("timing.inter_page_delay_min", "Inter-page Delay Min (s)", "number", {"min_value": 0.0, "max_value": 10.0, "step": 0.1}),
+            ("timing.inter_page_delay_max", "Inter-page Delay Max (s)", "number", {"min_value": 0.0, "max_value": 10.0, "step": 0.1}),
+        ],
+    },
+    "network_idle": {
+        "icon": "⏳",
+        "label": "Network Idle",
+        "fields": [
+            ("timing.scroll_wait_for_idle", "Wait for Network Idle", "bool", {}),
+            ("timing.scroll_idle_timeout_ms", "Idle Timeout (ms)", "number", {"min_value": 1000, "max_value": 30000, "step": 100}),
+            ("timing.scroll_idle_poll_ms", "Poll Interval (ms)", "number", {"min_value": 50, "max_value": 1000, "step": 10}),
+        ],
+    },
+    "fast": {
+        "icon": "⚡",
+        "label": "Fast Crawl (curl_cffi)",
+        "fields": [
+            ("fast.max_retries", "Max Retries", "number", {"min_value": 0, "max_value": 10, "step": 1}),
+            ("fast.retry_on_status", "Retry on Status Codes", "text", {}),
+            ("fast.max_workers", "Max Workers", "number", {"min_value": 1, "max_value": 32, "step": 1}),
+            ("fast.timeout", "Request Timeout (s)", "number", {"min_value": 5, "max_value": 120, "step": 1}),
+        ],
+    },
+    "crawl4ai": {
+        "icon": "🤖",
+        "label": "Crawl4AI",
+        "fields": [
+            ("crawl4ai.rate_limit_rps", "Rate Limit RPS", "number", {"min_value": 1, "max_value": 100, "step": 1}),
+            ("crawl4ai.rate_limit_burst", "Burst Allowance", "number", {"min_value": 1, "max_value": 10, "step": 1}),
+            ("crawl4ai.timeout", "Request Timeout (s)", "number", {"min_value": 10, "max_value": 300, "step": 5}),
+            ("crawl4ai.wait_until", "Wait Condition", "select", {"options": ["load", "domcontentloaded", "networkidle", "commit"]}),
+            ("crawl4ai.max_depth", "Max Depth", "number", {"min_value": 0, "max_value": 10, "step": 1}),
+            ("crawl4ai.max_pages", "Max Pages", "number", {"min_value": 100, "max_value": 100000, "step": 100}),
+            ("crawl4ai.strip_query_params", "Strip Query Params", "bool", {}),
+            ("crawl4ai.respect_robots_txt", "Respect robots.txt", "bool", {}),
+            ("crawl4ai.include_patterns", "Include Patterns", "textarea", {}),
+            ("crawl4ai.exclude_patterns", "Exclude Patterns", "textarea", {}),
+            ("crawl4ai.allowed_domains", "Allowed Domains", "textarea", {}),
+            ("crawl4ai.blocked_domains", "Blocked Domains", "textarea", {}),
+        ],
+    },
+    "trafilatura": {
+        "icon": "📄",
+        "label": "Trafilatura Extraction",
+        "fields": [
+            ("trafilatura.enabled", "Enabled", "bool", {}),
+            ("trafilatura.output_format", "Output Format", "select", {"options": ["txt", "markdown", "json", "xml", "xmltei", "csv", "html"]}),
+            ("trafilatura.include_comments", "Include Comments", "bool", {}),
+            ("trafilatura.include_tables", "Include Tables", "bool", {}),
+            ("trafilatura.include_images", "Include Images", "bool", {}),
+            ("trafilatura.include_formatting", "Include Formatting", "bool", {}),
+            ("trafilatura.include_links", "Include Links", "bool", {}),
+            ("trafilatura.favor_precision", "Favor Precision", "bool", {}),
+            ("trafilatura.favor_recall", "Favor Recall", "bool", {}),
+            ("trafilatura.target_language", "Target Language", "text", {}),
+            ("trafilatura.deduplicate", "Deduplicate", "bool", {}),
+            ("trafilatura.with_metadata", "With Metadata", "bool", {}),
+            ("trafilatura.only_with_metadata", "Only With Metadata", "bool", {}),
+            ("trafilatura.max_tree_size", "Max Tree Size", "number", {"min_value": 0, "step": 1000}),
+            ("trafilatura.author_blacklist", "Author Blacklist", "textarea", {}),
+            ("trafilatura.prune_xpath", "Prune XPaths", "textarea", {}),
+        ],
+    },
+    "output": {
+        "icon": "💾",
+        "label": "Output Folders",
+        "fields": [],
+    },
+    "advanced": {
+        "icon": "🔧",
+        "label": "Advanced",
+        "fields": [],
+    },
+}
 
 
 def _load_config() -> dict:
@@ -35,79 +104,65 @@ def _load_config() -> dict:
 
 def _save_config(config: dict) -> None:
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(config, f, default_flow_style=False)
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 
-def _render_config_editor(config: dict) -> None:
-    """Render the viewport/timing configuration editor."""
-    st.subheader("Viewport & Timing")
-
-    with st.form("cfg_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            new_width = st.number_input(
-                "Viewport width",
-                value=config["viewport"]["width"],
-                min_value=320,
-                max_value=3840,
-                help="Browser viewport width in pixels",
-            )
-            new_stab = st.number_input(
-                "Stabilization (ms)",
-                value=config["timing"]["stabilization_ms"],
-                min_value=500,
-                max_value=10000,
-                step=100,
-                help="Wait time after scroll before capture",
-            )
-            new_min_delay = st.number_input(
-                "Inter-page delay min (s)",
-                value=config["timing"]["inter_page_delay_min"],
-                min_value=0.0,
-                max_value=10.0,
-                help="Minimum random delay between pages",
-            )
-        with col2:
-            new_height = st.number_input(
-                "Viewport height",
-                value=config["viewport"]["height"],
-                min_value=320,
-                max_value=2160,
-                help="Browser viewport height in pixels",
-            )
-            new_max_delay = st.number_input(
-                "Inter-page delay max (s)",
-                value=config["timing"]["inter_page_delay_max"],
-                min_value=0.0,
-                max_value=10.0,
-                help="Maximum random delay between pages",
-            )
-            new_scroll_interval = st.number_input(
-                "Scroll interval (ms)",
-                value=config["timing"].get("scroll_interval_ms", 600),
-                min_value=100,
-                max_value=5000,
-                step=100,
-                help="Time between scroll steps",
-            )
-
-        if st.form_submit_button("Save Configuration", type="primary", width="stretch"):
-            try:
-                config["viewport"]["width"] = int(new_width)
-                config["viewport"]["height"] = int(new_height)
-                config["timing"]["stabilization_ms"] = int(new_stab)
-                config["timing"]["inter_page_delay_min"] = float(new_min_delay)
-                config["timing"]["inter_page_delay_max"] = float(new_max_delay)
-                config["timing"]["scroll_interval_ms"] = int(new_scroll_interval)
-                _save_config(config)
-                st.success("Config saved to config.yaml")
-            except Exception as e:
-                st.error(f"Failed to save: {e}")
+def _get_nested(d: dict, path: str):
+    for key in path.split("."):
+        if not isinstance(d, dict):
+            return None
+        d = d.get(key, {})
+    return d
 
 
-def _render_output_folders() -> None:
-    """Render output folder management."""
-    st.subheader("Output Folders")
+def _set_nested(d: dict, path: str, value) -> None:
+    keys = path.split(".")
+    for key in keys[:-1]:
+        d = d.setdefault(key, {})
+    d[keys[-1]] = value
+
+
+def _render_category(config: dict, cat_key: str) -> bool:
+    cat = CATEGORIES[cat_key]
+    modified = False
+
+    with st.form(f"cfg_form_{cat_key}", border=True):
+        st.markdown(f"### {cat['icon']} {cat['label']}")
+
+        for path, label, ftype, kwargs in cat["fields"]:
+            current = _get_nested(config, path)
+
+            if ftype == "number":
+                new_val = st.number_input(label, value=current, **kwargs)
+            elif ftype == "text":
+                new_val = st.text_input(label, value=str(current) if current else "", **kwargs)
+            elif ftype == "bool":
+                new_val = st.checkbox(label, value=bool(current), **kwargs)
+            elif ftype == "select":
+                opts = kwargs.get("options", [])
+                idx = opts.index(current) if current in opts else 0
+                new_val = st.selectbox(label, opts, index=idx, **kwargs)
+            elif ftype == "textarea":
+                val = "\n".join(current) if isinstance(current, list) else str(current or "")
+                new_val = st.text_area(label, value=val, height=100, **kwargs)
+                new_val = [x.strip() for x in new_val.split("\n") if x.strip()]
+            else:
+                continue
+
+            if new_val != current:
+                _set_nested(config, path, new_val)
+                modified = True
+
+        if st.form_submit_button("Save", type="primary", width="stretch"):
+            _save_config(config)
+            st.success("Config saved")
+            st.rerun()
+
+    return modified
+
+
+def _render_output_folders(config: dict) -> None:
+    st.markdown("### 💾 Output Folders")
 
     folders = sorted(
         [p for p in HERE.iterdir() if p.is_dir() and ((p / "data").exists() or (p / "photos").exists())],
@@ -138,14 +193,27 @@ def _render_output_folders() -> None:
                 _confirm_delete_folder(folder_path, selected)
 
         with col3:
-            # Show folder size
             total_size = sum(f.stat().st_size for f in folder_path.rglob("*") if f.is_file())
             st.metric("Size", f"{total_size / 1024 / 1024:.1f} MB")
 
 
+@st.dialog("Delete folder")
+def _confirm_delete_folder(folder_path, selected):
+    st.write(f"Delete `{selected}`? This cannot be undone.")
+    with st.container(horizontal=True):
+        if st.button("Yes, delete", type="primary"):
+            try:
+                shutil.rmtree(folder_path)
+                st.success(f"Deleted {selected}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to delete: {e}")
+        if st.button("Cancel"):
+            st.rerun()
+
+
 def _render_about() -> None:
-    """Render about/version info."""
-    st.subheader("About")
+    st.markdown("### ℹ️ About")
     st.markdown("""
     **Page Capture** — Desktop website migration audit tool
 
@@ -153,6 +221,7 @@ def _render_about() -> None:
     - SEO extraction via CSS selectors
     - Custom extraction rules
     - Fast crawl mode (curl_cffi)
+    - Content extraction (trafilatura)
     - PDF reports via fpdf2
 
     **Version:** 1.0.0
@@ -168,13 +237,31 @@ def page_settings() -> None:
 
     config = _load_config()
 
-    tabs = st.tabs(["Configuration", "Output Folders", "About"])
+    # Sidebar category navigation
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### Settings Categories")
+        cat_keys = list(CATEGORIES.keys())
+        cat_labels = [f"{CATEGORIES[k]['icon']} {CATEGORIES[k]['label']}" for k in cat_keys]
+        selected_idx = st.radio(
+            "Category",
+            range(len(cat_keys)),
+            format_func=lambda i: cat_labels[i],
+            key="settings_cat",
+            label_visibility="collapsed",
+        )
+        selected_cat = cat_keys[selected_idx]
 
-    with tabs[0]:
-        _render_config_editor(config)
-
-    with tabs[1]:
-        _render_output_folders()
-
-    with tabs[2]:
+    # Main content
+    if selected_cat == "output":
+        _render_output_folders(config)
+    elif selected_cat == "advanced":
+        st.markdown("### 🔧 Advanced")
+        st.caption("Overlay hiding selectors (managed in config.yaml directly)")
+        st.caption("Edit config.yaml for hide/hide_visibility sections")
+        st.markdown("---")
+        _render_about()
+    else:
+        _render_category(config, selected_cat)
+        st.markdown("---")
         _render_about()
